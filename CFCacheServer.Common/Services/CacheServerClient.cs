@@ -34,12 +34,17 @@ namespace CFCacheServer.Services
 
         public Task AddAsync<T>(string key, T value, TimeSpan expiry)
         {
+            if (String.IsNullOrEmpty(key))
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+
             var serializer = new CacheItemValueSerializer();
             
             var request = new AddCacheItemRequest()
             {
                 SecurityKey = _securityKey,
-                CacheItem = new CacheItemInternal()
+                CacheItem = new CacheItem()
                 {
                     Key = key,
                     Value = serializer.Serialize(value, value.GetType()),
@@ -61,8 +66,34 @@ namespace CFCacheServer.Services
             return Task.CompletedTask;
         }
 
+        public Task DeleteAllAsync()
+        {
+            var request = new DeleteCacheItemRequest()
+            {
+                SecurityKey = _securityKey,
+                ItemKey = ""
+            };
+
+            try
+            {
+                var response = _cacheServerConnection.SendDeleteCacheItemRequst(request, _remoteEndpointInfo);
+                ThrowResponseExceptionIfRequired(response);
+            }
+            catch (MessageConnectionException messageConnectionException)
+            {
+                throw new CacheServerException("Error deleting all cache items", messageConnectionException);
+            }
+
+            return Task.CompletedTask;
+        }
+
         public Task DeleteAsync(string key)
         {
+            if (String.IsNullOrEmpty(key))
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+
             var request = new DeleteCacheItemRequest()
             {
                 SecurityKey = _securityKey,
@@ -84,6 +115,11 @@ namespace CFCacheServer.Services
 
         public Task<T?> GetByKeyAsync<T>(string key)
         {
+            if (String.IsNullOrEmpty(key))
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+
             var request = new GetCacheItemRequest()
             {
                 SecurityKey = _securityKey,
@@ -109,6 +145,27 @@ namespace CFCacheServer.Services
             {
                 throw new CacheServerException("Error adding cache item", messageConnectionException);
             }            
+        }
+
+        public Task<List<string>> GetKeysByFilterAsync(CacheItemFilter filter)
+        {           
+            var request = new GetCacheItemKeysRequest()
+            {
+                SecurityKey = _securityKey,
+                Filter = filter
+            };
+
+            try
+            {
+                var response = _cacheServerConnection.SendGetCacheItemKeysRequst(request, _remoteEndpointInfo);
+                ThrowResponseExceptionIfRequired(response);
+
+                return Task.FromResult(response.ItemKeys);
+            }
+            catch (MessageConnectionException messageConnectionException)
+            {
+                throw new CacheServerException("Error adding cache item", messageConnectionException);
+            }
         }
 
         /// <summary>

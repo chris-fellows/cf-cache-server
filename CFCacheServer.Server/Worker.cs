@@ -1,9 +1,11 @@
 ﻿using CFCacheServer.Common.Interfaces;
 using CFCacheServer.Constants;
+using CFCacheServer.Enums;
 using CFCacheServer.Logging;
 using CFCacheServer.Models;
 using CFCacheServer.Server.Enums;
 using CFCacheServer.Server.Models;
+using CFCacheServer.Utilities;
 using CFConnectionMessaging.Models;
 using System;
 using System.Collections.Concurrent;
@@ -192,6 +194,11 @@ namespace CFCacheServer.Server
                         _queueItemTasks.Add(new QueueItemTask(HandleDeleteCacheItemRequestAsync(deleteCacheItemRequest, queueItem.MessageReceivedInfo), queueItem));
                         break;
 
+                    case MessageTypeIds.GetCacheItemKeysRequest:
+                        var getCacheItemKeysRequest = _clientsConnection.MessageConverterList.GetCacheItemKeysRequestConverter.GetExternalMessage(queueItem.ConnectionMessage);
+                        _queueItemTasks.Add(new QueueItemTask(HandleGetCacheItemKeysRequestAsync(getCacheItemKeysRequest, queueItem.MessageReceivedInfo), queueItem));
+                        break;
+
                     case MessageTypeIds.GetCacheItemRequest:
                         var getCacheItemRequest = _clientsConnection.MessageConverterList.GetCacheItemRequestConverter.GetExternalMessage(queueItem.ConnectionMessage);
                         _queueItemTasks.Add(new QueueItemTask(HandleGetCacheItemRequestAsync(getCacheItemRequest, queueItem.MessageReceivedInfo), queueItem));
@@ -257,14 +264,22 @@ namespace CFCacheServer.Server
                         Sequence = 1
                     },
                 };
+             
+                if (addCacheItemRequest.SecurityKey != _systemConfig.SecurityKey)
+                {
+                    response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
+                    response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                }
+                else
+                {
+                    // TODO: Sending DateTimeOffset does not serialize
+                    addCacheItemRequest.CacheItem.CreatedDateTime = DateTimeOffset.UtcNow;
 
-                // TODO: Sending DateTimeOffset does not serialize
-                addCacheItemRequest.CacheItem.CreatedDateTime = DateTimeOffset.UtcNow;
-   
-                // Add cache item
-                _cacheService.Add(addCacheItemRequest.CacheItem);
+                    // Add cache item
+                    _cacheService.Add(addCacheItemRequest.CacheItem);
 
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Adding {addCacheItemRequest.CacheItem.Key} to cache");
+                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Adding {addCacheItemRequest.CacheItem.Key} to cache");
+                }
 
                 // Send response
                 _clientsConnection.SendAddCacheItemResponse(response, messageReceivedInfo.RemoteEndpointInfo);
@@ -285,13 +300,53 @@ namespace CFCacheServer.Server
                         MessageId = getCacheItemRequest.Id,
                         Sequence = 1
                     },
-                };                
+                };
 
-                // Get cache item
-                response.CacheItem = _cacheService.Get(getCacheItemRequest.ItemKey);
+                if (getCacheItemRequest.SecurityKey != _systemConfig.SecurityKey)
+                {
+                    response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
+                    response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                }
+                else
+                {
+                    // Get cache item
+                    response.CacheItem = _cacheService.Get(getCacheItemRequest.ItemKey);
+                }
                 
                 // Send response                
                 _clientsConnection.SendGetCacheItemResponse(response, messageReceivedInfo.RemoteEndpointInfo);                
+            });
+        }
+
+        private Task HandleGetCacheItemKeysRequestAsync(GetCacheItemKeysRequest getCacheItemKeysRequest, MessageReceivedInfo messageReceivedInfo)
+        {
+            return Task.Factory.StartNew(async () =>
+            {
+                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing {getCacheItemKeysRequest.TypeId}");
+
+                var response = new GetCacheItemKeysResponse()
+                {
+                    Response = new MessageResponse()
+                    {
+                        IsMore = false,
+                        MessageId = getCacheItemKeysRequest.Id,
+                        Sequence = 1
+                    },
+                };
+
+                if (getCacheItemKeysRequest.SecurityKey != _systemConfig.SecurityKey)
+                {
+                    response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
+                    response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                }
+                else
+                {
+                    response.ItemKeys = _cacheService.GetKeysByFilter(getCacheItemKeysRequest.Filter);
+
+                }
+
+                // Send response                
+                _clientsConnection.SendGetCacheItemKeysResponse(response, messageReceivedInfo.RemoteEndpointInfo);
             });
         }
 
@@ -309,10 +364,28 @@ namespace CFCacheServer.Server
                     },
                 };
 
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Deleted cache item {deleteCacheItemRequest.ItemKey}");
+                if (deleteCacheItemRequest.SecurityKey != _systemConfig.SecurityKey)
+                {
+                    response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
+                    response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                }
+                else
+                {
+                    if (String.IsNullOrEmpty(deleteCacheItemRequest.ItemKey))
+                    {
+                        _log.Log(DateTimeOffset.UtcNow, "Information", "Cleared cache");
 
-                // Delete cache item
-                _cacheService.Delete(deleteCacheItemRequest.ItemKey);
+                        // Clear
+                        _cacheService.DeleteAll();
+                    }
+                    else
+                    {
+                        _log.Log(DateTimeOffset.UtcNow, "Information", $"Deleted cache item {deleteCacheItemRequest.ItemKey}");
+
+                        // Delete cache item
+                        _cacheService.Delete(deleteCacheItemRequest.ItemKey);
+                    }                    
+                }
 
                 // Send response
                 _clientsConnection.SendDeleteCacheItemResponse(response, messageReceivedInfo.RemoteEndpointInfo);

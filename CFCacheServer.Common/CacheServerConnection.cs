@@ -73,6 +73,7 @@ namespace CFCacheServer
             {
                 MessageTypeIds.AddCacheItemResponse,
                 MessageTypeIds.DeleteCacheItemResponse,
+                MessageTypeIds.GetCacheItemKeysResponse,
                 MessageTypeIds.GetCacheItemResponse
             };
 
@@ -142,6 +143,27 @@ namespace CFCacheServer
             throw new MessageConnectionException("No response to get cache item");
         }
 
+        public GetCacheItemKeysResponse SendGetCacheItemKeysRequst(GetCacheItemKeysRequest request, EndpointInfo remoteEndpointInfo)
+        {
+            _connection.SendMessage(_messageConverterList.GetCacheItemKeysRequestConverter.GetConnectionMessage(request), remoteEndpointInfo);
+
+            // Wait for response
+            var responseMessages = new List<MessageBase>();
+            var isGotAllMessages = WaitForResponses(request, _responseTimeout, _responseMessages,
+                  (responseMessage) =>
+                  {
+                      responseMessages.Add(responseMessage);
+                  });
+
+
+            if (isGotAllMessages)
+            {
+                return (GetCacheItemKeysResponse)responseMessages.First();
+            }
+
+            throw new MessageConnectionException("No response to get cache item keys");
+        }
+
         /// <summary>
         /// Waits for all responses for request until completed or timeout. Where multiple responses are required then
         /// MessageBase.Response.IsMore=true for all except the last one.
@@ -191,6 +213,8 @@ namespace CFCacheServer
                     return _messageConverterList.AddCacheItemResponseConverter.GetExternalMessage(connectionMessage);
                 case MessageTypeIds.DeleteCacheItemResponse:
                     return _messageConverterList.DeleteCacheItemResponseConverter.GetExternalMessage(connectionMessage);
+                case MessageTypeIds.GetCacheItemKeysResponse:
+                    return _messageConverterList.GetCacheItemKeysResponseConverter.GetExternalMessage(connectionMessage);
                 case MessageTypeIds.GetCacheItemResponse:
                     return _messageConverterList.GetCacheItemResponseConverter.GetExternalMessage(connectionMessage);
             }

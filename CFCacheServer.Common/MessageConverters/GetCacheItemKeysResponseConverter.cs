@@ -10,9 +10,9 @@ using System.Threading.Tasks;
 
 namespace CFCacheServer.MessageConverters
 {
-    public class GetCacheItemResponseConverter : IExternalMessageConverter<GetCacheItemResponse>
+    public class GetCacheItemKeysResponseConverter : IExternalMessageConverter<GetCacheItemKeysResponse>
     {
-        public ConnectionMessage GetConnectionMessage(GetCacheItemResponse externalMessage)
+        public ConnectionMessage GetConnectionMessage(GetCacheItemKeysResponse externalMessage)
         {
             var connectionMessage = new ConnectionMessage()
             {
@@ -29,9 +29,9 @@ namespace CFCacheServer.MessageConverters
                     },
                       new ConnectionMessageParameter()
                    {
-                       Name = "CacheItem",
-                       Value = externalMessage.CacheItem == null ? "" :
-                                        JsonUtilities.SerializeToBase64String(externalMessage.CacheItem,
+                       Name = "ItemKeys",
+                       Value = externalMessage.ItemKeys == null ? "" :
+                                        JsonUtilities.SerializeToBase64String(externalMessage.ItemKeys,
                                         JsonUtilities.DefaultJsonSerializerOptions)
                    }
                 }
@@ -39,9 +39,9 @@ namespace CFCacheServer.MessageConverters
             return connectionMessage;
         }
 
-        public GetCacheItemResponse GetExternalMessage(ConnectionMessage connectionMessage)
+        public GetCacheItemKeysResponse GetExternalMessage(ConnectionMessage connectionMessage)
         {
-            var externalMessage = new GetCacheItemResponse()
+            var externalMessage = new GetCacheItemKeysResponse()
             {
                 Id = connectionMessage.Id
             };
@@ -54,10 +54,10 @@ namespace CFCacheServer.MessageConverters
             }
 
             // Get cache item
-            var cacheItemParameter = connectionMessage.Parameters.First(p => p.Name == "CacheItem");
-            if (!String.IsNullOrEmpty(cacheItemParameter.Value))
+            var itemKeysParameter = connectionMessage.Parameters.First(p => p.Name == "ItemKeys");
+            if (!String.IsNullOrEmpty(itemKeysParameter.Value))
             {
-                externalMessage.CacheItem = JsonUtilities.DeserializeFromBase64String<CacheItem>(cacheItemParameter.Value, JsonUtilities.DefaultJsonSerializerOptions);
+                externalMessage.ItemKeys = JsonUtilities.DeserializeFromBase64String<List<string>>(itemKeysParameter.Value, JsonUtilities.DefaultJsonSerializerOptions);
             }
 
             return externalMessage;

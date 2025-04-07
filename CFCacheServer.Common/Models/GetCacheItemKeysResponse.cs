@@ -7,14 +7,14 @@ using System.Threading.Tasks;
 
 namespace CFCacheServer.Models
 {
-    public class AddCacheItemRequest : MessageBase
+    public class GetCacheItemKeysResponse : MessageBase
     {
-        public CacheItem CacheItem { get; set; } = new();
+        public List<string> ItemKeys { get; set; } = new();
 
-        public AddCacheItemRequest()
+        public GetCacheItemKeysResponse()
         {
             Id = Guid.NewGuid().ToString();
-            TypeId = MessageTypeIds.AddCacheItemRequest;
+            TypeId = MessageTypeIds.GetCacheItemKeysResponse;
         }
     }
 }

@@ -9,7 +9,7 @@ namespace CFCacheServer.Models
 {
     public class GetCacheItemResponse : MessageBase
     {       
-        public CacheItemInternal? CacheItem { get; set; }
+        public CacheItem? CacheItem { get; set; }
 
         public GetCacheItemResponse()
         {

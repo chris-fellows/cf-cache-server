@@ -70,6 +70,11 @@ namespace CFCacheServer.Server
             _connection.SendMessage(_messageConverterList.GetCacheItemResponseConverter.GetConnectionMessage(response), remoteEndpointInfo);
         }
 
+        public void SendGetCacheItemKeysResponse(GetCacheItemKeysResponse response, EndpointInfo remoteEndpointInfo)
+        {
+            _connection.SendMessage(_messageConverterList.GetCacheItemKeysResponseConverter.GetConnectionMessage(response), remoteEndpointInfo);
+        }
+
         public void SendDeleteCacheItemResponse(DeleteCacheItemResponse response, EndpointInfo remoteEndpointInfo)
         {
             _connection.SendMessage(_messageConverterList.DeleteCacheItemResponseConverter.GetConnectionMessage(response), remoteEndpointInfo);

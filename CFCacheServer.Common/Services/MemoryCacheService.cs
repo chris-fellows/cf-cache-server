@@ -6,7 +6,7 @@ namespace CFCacheServer.Common.Services
 {
     public class MemoryCacheService : ICacheService
     {
-        private Dictionary<string, CacheItemInternal> _cacheItems = new();
+        private Dictionary<string, CacheItem> _cacheItems = new();
 
         private Mutex _mutex = new Mutex();
 
@@ -32,7 +32,7 @@ namespace CFCacheServer.Common.Services
             }            
         }
 
-        public void Clear()
+        public void DeleteAll()
         {
             try
             {
@@ -53,8 +53,7 @@ namespace CFCacheServer.Common.Services
             var keysToExpire = new List<string>();
             foreach (var key in _cacheItems.Keys)
             {
-                if (_cacheItems[key].ExpiryMilliseconds > 0 &&
-                        _cacheItems[key].CreatedDateTime.AddMilliseconds(_cacheItems[key].ExpiryMilliseconds) <= now)
+                if (IsExpired(_cacheItems[key], now))
                 {
                     keysToExpire.Add(key);
                 }
@@ -70,7 +69,7 @@ namespace CFCacheServer.Common.Services
             }
         }
 
-        public void Add(CacheItemInternal cacheItem)
+        public void Add(CacheItem cacheItem)
         {            
             // Initialise timer for expiry
             if (_timer == null)
@@ -98,7 +97,13 @@ namespace CFCacheServer.Common.Services
             }            
         }
 
-        public CacheItemInternal? Get(string key)
+        private static bool IsExpired(CacheItem cacheItem, DateTimeOffset now)
+        {
+            return cacheItem.ExpiryMilliseconds > 0 &&
+                cacheItem.CreatedDateTime.AddMilliseconds(cacheItem.ExpiryMilliseconds) <= now;
+        }
+
+        public CacheItem? Get(string key)
         {            
             try
             {
@@ -106,17 +111,16 @@ namespace CFCacheServer.Common.Services
 
                 if (_cacheItems.ContainsKey(key))
                 {
-                    var cacheItem = _cacheItems[key];
-                    
-                    if (cacheItem.ExpiryMilliseconds == 0 ||
-                        cacheItem.CreatedDateTime.AddMilliseconds(cacheItem.ExpiryMilliseconds) > DateTimeOffset.UtcNow)
-                    {
-                        return cacheItem;
-                    }
-                    else     // Expired, remove it
+                    var cacheItem = _cacheItems[key];                    
+                   
+                    if (IsExpired(cacheItem, DateTimeOffset.UtcNow))
                     {
                         _cacheItems.Remove(key);
                     }
+                    else
+                    {
+                        return cacheItem;
+                    }                    
                 }                
             }
             finally
@@ -159,6 +163,58 @@ namespace CFCacheServer.Common.Services
                     _mutex.ReleaseMutex();
                 }
             }
+        }
+
+        public List<string> GetKeysByFilter(CacheItemFilter filter)
+        {
+            try
+            {
+                _mutex.WaitOne();
+
+                var keys = new List<string>();
+
+                var now = DateTimeOffset.UtcNow;
+                foreach(var key in _cacheItems.Keys)
+                {
+                    if (IsValidForFilter(_cacheItems[key], filter) &&
+                        !IsExpired(_cacheItems[key], now))
+                    {
+                        keys.Add(key);
+                    }
+                }
+
+                keys.Sort();
+
+                return keys;
+            }
+            finally
+            {
+                _mutex.ReleaseMutex();
+            }
+        }
+
+        private static bool IsValidForFilter(CacheItem cacheItem, CacheItemFilter filter)
+        {
+            if (!String.IsNullOrEmpty(filter.KeyStartsWith) &&
+                !cacheItem.Key.StartsWith(filter.KeyStartsWith))
+            {
+                return false;
+            }
+
+            if (!String.IsNullOrEmpty(filter.KeyEndsWith) &&
+                !cacheItem.Key.EndsWith(filter.KeyEndsWith))
+            {
+                return false;
+            }
+
+            if (!String.IsNullOrEmpty(filter.KeyContains) &&
+                !cacheItem.Key.Contains(filter.KeyContains))
+            {
+                return false;
+            }
+
+            return true;
+
         }
     }
 }

@@ -10,9 +10,9 @@ using System.Threading.Tasks;
 
 namespace CFCacheServer.MessageConverters
 {
-    public class AddCacheItemRequestConverter : IExternalMessageConverter<AddCacheItemRequest>
+    public class GetCacheItemKeysRequestConverter : IExternalMessageConverter<GetCacheItemKeysRequest>
     {
-        public ConnectionMessage GetConnectionMessage(AddCacheItemRequest externalMessage)
+        public ConnectionMessage GetConnectionMessage(GetCacheItemKeysRequest externalMessage)
         {
             var connectionMessage = new ConnectionMessage()
             {
@@ -29,12 +29,12 @@ namespace CFCacheServer.MessageConverters
                       {
                           Name = "ClientSessionId",
                           Value = externalMessage.ClientSessionId
-                      },                   
+                      },
                    new ConnectionMessageParameter()
                    {
-                       Name = "CacheItem",
-                       Value = externalMessage.CacheItem == null ? "" :
-                                        JsonUtilities.SerializeToBase64String(externalMessage.CacheItem,
+                       Name = "Filter",
+                       Value = externalMessage.Filter == null ? "" :
+                                        JsonUtilities.SerializeToBase64String(externalMessage.Filter,
                                         JsonUtilities.DefaultJsonSerializerOptions)
                    }
                 }
@@ -42,20 +42,20 @@ namespace CFCacheServer.MessageConverters
             return connectionMessage;
         }
 
-        public AddCacheItemRequest GetExternalMessage(ConnectionMessage connectionMessage)
+        public GetCacheItemKeysRequest GetExternalMessage(ConnectionMessage connectionMessage)
         {
-            var externalMessage = new AddCacheItemRequest()
+            var externalMessage = new GetCacheItemKeysRequest()
             {
                 Id = connectionMessage.Id,
                 SecurityKey = connectionMessage.Parameters.First(p => p.Name == "SecurityKey").Value,
-                ClientSessionId = connectionMessage.Parameters.First(p => p.Name == "ClientSessionId").Value                
+                ClientSessionId = connectionMessage.Parameters.First(p => p.Name == "ClientSessionId").Value
             };
 
-            // Get cache item
-            var cacheItemParameter = connectionMessage.Parameters.First(p => p.Name == "CacheItem");
-            if (!String.IsNullOrEmpty(cacheItemParameter.Value))
+            // Get filter
+            var filterParameter = connectionMessage.Parameters.First(p => p.Name == "Filter");
+            if (!String.IsNullOrEmpty(filterParameter.Value))
             {
-                externalMessage.CacheItem = JsonUtilities.DeserializeFromBase64String<CacheItem>(cacheItemParameter.Value, JsonUtilities.DefaultJsonSerializerOptions);
+                externalMessage.Filter = JsonUtilities.DeserializeFromBase64String<CacheItemFilter>(filterParameter.Value, JsonUtilities.DefaultJsonSerializerOptions);
             }
 
             return externalMessage;

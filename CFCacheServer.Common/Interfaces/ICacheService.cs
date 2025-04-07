@@ -1,4 +1,5 @@
 ﻿using CFCacheServer.Models;
+using System.Net;
 
 namespace CFCacheServer.Common.Interfaces
 {
@@ -8,22 +9,22 @@ namespace CFCacheServer.Common.Interfaces
     public interface ICacheService
     {
         /// <summary>
-        /// Clears cache
+        /// Deletes all cache items
         /// </summary>
-        void Clear();
+        void DeleteAll();
 
         /// <summary>
         /// Add item
         /// </summary>
         /// <param name="cacheItem"></param>
-        void Add(CacheItemInternal cacheItem);
+        void Add(CacheItem cacheItem);
 
         /// <summary>
         /// Get item
         /// </summary>
         /// <param name="key"></param>
         /// <returns></returns>
-        CacheItemInternal? Get(string key);
+        CacheItem? Get(string key);
 
         /// <summary>
         /// Delete item
@@ -35,5 +36,12 @@ namespace CFCacheServer.Common.Interfaces
         /// Item count
         /// </summary>
         int ItemCount { get; }
+
+        /// <summary>
+        /// Gets cache item keys by filter
+        /// </summary>
+        /// <param name="filter"></param>
+        /// <returns></returns>
+        List<string> GetKeysByFilter(CacheItemFilter filter);
     }
 }

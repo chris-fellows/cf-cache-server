@@ -1,12 +1,10 @@
 ﻿using CFCacheServer.Interfaces;
+using CFCacheServer.Models;
 using CFCacheServer.Services;
 using CFCacheServer.Utilities;
 using CFCacheServer.TestClient.Models;
 using CFConnectionMessaging.Models;
 using System.Diagnostics;
-
-// See https://aka.ms/new-console-template for more information
-Console.WriteLine("Hello, World!");
 
 var remoteEndpointInfo = new EndpointInfo()
 {
@@ -26,10 +24,25 @@ var testObject = new TestObject()
 };
 
 var stopwatch = new Stopwatch();
-stopwatch.Start();
-cacheServerClient.AddAsync("TestObject1", testObject, TimeSpan.FromHours(12)).Wait();
-stopwatch.Stop();
-Console.WriteLine($"Add cache item took {stopwatch.ElapsedMilliseconds} ms");
+//stopwatch.Start();
+//cacheServerClient.AddAsync("TestObject1", testObject, TimeSpan.FromHours(12)).Wait();
+//stopwatch.Stop();
+//Console.WriteLine($"Add cache item took {stopwatch.ElapsedMilliseconds} ms");
+
+for(int index = 0; index < 200; index++)
+{
+    var testObject1 = new TestObject()
+    {
+        Id = Guid.NewGuid().ToString(),
+        BoolValue = true,
+        Int32Value = 1234567
+    };
+
+    cacheServerClient.AddAsync($"TestObject{index}", testObject1, TimeSpan.FromHours(12)).Wait();
+}
+
+// Get keys for filter
+var keys = cacheServerClient.GetKeysByFilterAsync(new CacheItemFilter() {  KeyContains = "es" }).Result;
 
 stopwatch.Restart();
 var testObjectCached = cacheServerClient.GetByKeyAsync<TestObject?>("TestObject1").Result;

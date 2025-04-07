@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace CFCacheServer.Models
 {
-    public class CacheItemInternal
+    public class CacheItem
     {
         public string Key { get; set; } = String.Empty;
 

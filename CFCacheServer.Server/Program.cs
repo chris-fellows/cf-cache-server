@@ -36,7 +36,7 @@ internal static class Program
         return new SystemConfig()
         {
             LocalPort = Convert.ToInt32(System.Configuration.ConfigurationManager.AppSettings["LocalPort"].ToString()),
-            SecurityKey = System.Configuration.ConfigurationManager.AppSettings["LocalPort"].ToString()
+            SecurityKey = System.Configuration.ConfigurationManager.AppSettings["SecurityKey"].ToString()
         };
     }
 
