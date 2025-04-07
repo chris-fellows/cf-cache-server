@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "CFCacheServer.Server": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
