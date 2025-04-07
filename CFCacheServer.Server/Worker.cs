@@ -25,15 +25,18 @@ namespace CFCacheServer.Server
 
         private readonly ConcurrentQueue<QueueItem> _queueItems = new();
 
-        private readonly List<QueueItemTask> _queueItemTasks = new List<QueueItemTask>();
+        private readonly List<QueueItemTask> _queueItemTasks = new();
 
-        private Thread _thread;
+        private Thread? _thread;
 
         private readonly SystemConfig _systemConfig;
 
         private readonly ICacheService _cacheService;
 
         private ISimpleLog _log;
+
+        private TimeSpan _archiveLogsFrequency = TimeSpan.FromHours(12);
+        private DateTimeOffset _lastArchiveLogs = DateTimeOffset.MinValue;
 
         public Worker(SystemConfig systemConfig, ICacheService cacheService, ISimpleLog log)
         {
@@ -66,84 +69,120 @@ namespace CFCacheServer.Server
             get { return Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true"; }
         }
 
+        /// <summary>
+        /// Waits for container to stop
+        /// </summary>
+        private void WaitForContaininerStop()
+        {
+            // Register event handler to detect container stopping
+            var loadContext = AssemblyLoadContext.GetLoadContext(typeof(Program).Assembly);
+            if (loadContext != null)
+            {
+                loadContext.Unloading += delegate (AssemblyLoadContext context)
+                {
+                    _log.Log(DateTimeOffset.UtcNow, "Information", "Detected that container is stopping");
+                    _cancellationTokenSource.Cancel();
+                };
+            }
+
+            // Wait until container unloads
+            while (!_cancellationTokenSource.Token.IsCancellationRequested)
+            {
+                Thread.Sleep(200);
+               
+                // Periodically archive logs
+                if (_lastArchiveLogs.Add(_archiveLogsFrequency) <= DateTimeOffset.UtcNow &&
+                    !_queueItems.Any(i => i.ItemType == QueueItemTypes.ArchiveLogs))
+                {
+                    _lastArchiveLogs = DateTimeOffset.UtcNow;
+                    _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.ArchiveLogs });
+                }
+
+                Thread.Yield();
+            }
+        }
+
+        /// <summary>
+        /// Waits for process to stop (User presses Escape)
+        /// </summary>
+        private void WaitForDefaultStop()
+        {
+            // Wait until user stops
+            do
+            {
+                Console.WriteLine("Press ESCAPE to stop");  // Also displayed if user presses other key
+                while (!Console.KeyAvailable &&
+                    !_cancellationTokenSource.Token.IsCancellationRequested)
+                {
+                    Thread.Sleep(200);                    
+
+                    // Periodically archive logs
+                    if (_lastArchiveLogs.Add(_archiveLogsFrequency) <= DateTimeOffset.UtcNow &&
+                        !_queueItems.Any(i => i.ItemType == QueueItemTypes.ArchiveLogs))
+                    {
+                        _lastArchiveLogs = DateTimeOffset.UtcNow;
+                        _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.ArchiveLogs });
+                    }
+
+                    Thread.Yield();
+                }
+            } while (Console.ReadKey(true).Key != ConsoleKey.Escape &&
+                    !_cancellationTokenSource.Token.IsCancellationRequested);
+        }
+
+        /// <summary>
+        /// Starts worker thread, waits for event that triggers stop (Container stop, user presses Escape)
+        /// </summary>
+        /// <param name="cancellationTokenSource"></param>
         public void Start(CancellationTokenSource cancellationTokenSource)
         {
             _log.Log(DateTimeOffset.UtcNow, "Information", "Worker starting");
 
             _cancellationTokenSource = cancellationTokenSource; 
 
+            // Start thread
             _thread = new Thread(Run);
             _thread.Start();
-
-            // Wait for request to stop            
+     
             if (IsInDockerContainer)
             {
-                bool active = true;
-                var loadContext = AssemblyLoadContext.GetLoadContext(typeof(Program).Assembly);
-                if (loadContext != null)
-                {
-                    loadContext.Unloading += delegate (AssemblyLoadContext context)
-                    {
-                        Console.WriteLine("Detected that container is stopping");
-                        active = false;
-                    };
-                }
-
-                /*
-                AssemblyLoadContext.Default.Unloading += delegate (AssemblyLoadContext context)
-                {
-                    Console.WriteLine("Stopping worker due to terminating");
-                    messageQueueWorkers.ForEach(worker => worker.Stop());
-                    Console.WriteLine("Stopped worker");
-                    active = false;
-                };
-                */
-
-                while (active &&
-                    !_cancellationTokenSource.Token.IsCancellationRequested)
-                {
-                    Thread.Sleep(100);
-                    Thread.Yield();
-                }
+                WaitForContaininerStop();              
             }
-            else
+            else     // Normal process
             {
-                do
-                {
-                    Console.WriteLine("Press ESCAPE to stop");  // Also displayed if user presses other key
-                    while (!Console.KeyAvailable &&
-                        !_cancellationTokenSource.Token.IsCancellationRequested)
-                    {
-                        Thread.Sleep(100);
-                        Thread.Yield();
-                    }
-                } while (Console.ReadKey(true).Key != ConsoleKey.Escape &&
-                        !_cancellationTokenSource.Token.IsCancellationRequested);
+                WaitForDefaultStop();
             }
+
+            _log.Log(DateTimeOffset.UtcNow, "Information", "Worker stopping");
         }
 
         public void Stop()
-        {
-            //_log.Log(DateTimeOffset.UtcNow, "Information", "Worker stopping");
-
-            _cancellationTokenSource.Cancel();
+        {            
+            if (_cancellationTokenSource != null) _cancellationTokenSource.Cancel();
         }
 
+        /// <summary>
+        /// Performs worker processing
+        /// </summary>
         public void Run()
         {
             var cancellationToken = _cancellationTokenSource.Token;
 
             // Listen for clients
-            _clientsConnection.StartListening(_systemConfig.LocalPort);
+            _clientsConnection.StartListening(_systemConfig.LocalPort);            
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                if (_queueItems.Any())
+                // Process queue
+                while (_queueItems.Any() &&
+                    _queueItemTasks.Count < _systemConfig.MaxConcurrentTasks)
                 {
-                    ProcessQueueItems(() =>
+                    if (_queueItems.TryDequeue(out QueueItem queueItem))
                     {
-                        // Periodic action to do while processing queue items
-                    });
+                        ProcessQueueItem(queueItem);
+                    }
+
+                    Thread.Sleep(1);
                 }
 
                 Thread.Sleep(1);
@@ -156,24 +195,7 @@ namespace CFCacheServer.Server
             // Stop listening
             _clientsConnection.StopListening();
         }
-
-        /// <summary>
-        /// Processes queue items
-        /// </summary>
-        /// <param name="periodicAction"></param>
-        private void ProcessQueueItems(Action periodicAction)
-        {
-            while (_queueItems.Any())
-            {
-                if (_queueItems.TryDequeue(out QueueItem queueItem))
-                {
-                    ProcessQueueItem(queueItem);
-                }
-
-                periodicAction();
-            }
-        }
-
+       
         /// <summary>
         /// Processes queue item
         /// </summary>
@@ -206,14 +228,10 @@ namespace CFCacheServer.Server
 
                 }
             }
-            //else if (queueItem.ItemType == QueueItemTypes.ArchiveLogs)
-            //{
-            //    _queueItemTasks.Add(new QueueItemTask(ArchiveLogsAsync(), queueItem));
-            //}
-            //else if (queueItem.ItemType == QueueItemTypes.LogHubStatistics)
-            //{
-            //    _queueItemTasks.Add(new QueueItemTask(LogHubStatisticsAsync(), queueItem));
-            //}
+            else if (queueItem.ItemType == QueueItemTypes.ArchiveLogs)
+            {
+                _queueItemTasks.Add(new QueueItemTask(ArchiveLogsAsync(), queueItem));
+            }          
         }
 
         private void CheckCompleteQueueItemTasks(List<QueueItemTask> queueItemTasks)
@@ -389,6 +407,27 @@ namespace CFCacheServer.Server
 
                 // Send response
                 _clientsConnection.SendDeleteCacheItemResponse(response, messageReceivedInfo.RemoteEndpointInfo);
+            });
+        }
+
+        /// <summary>
+        /// Archives logs
+        /// </summary>
+        /// <returns></returns>
+        private Task ArchiveLogsAsync()
+        {
+            return Task.Factory.StartNew(() =>
+            {
+                for (int days = _systemConfig.MaxLogDays; days < _systemConfig.MaxLogDays + 30; days++)
+                {
+                    var logDate = DateTimeOffset.UtcNow.Subtract(TimeSpan.FromDays(days));
+
+                    var logFile = Path.Combine(_systemConfig.LogFolder, $"CacheServer-{logDate.ToString("yyyy-MM-dd")}.txt");
+                    if (File.Exists(logFile))
+                    {
+                        File.Delete(logFile);
+                    }
+                }                
             });
         }
     }

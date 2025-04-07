@@ -10,17 +10,18 @@ WORKDIR /app
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
-COPY ["CFCacheServer.Server.csproj", "."]
-COPY ["../CFCacheServer.Common/CFCacheServer.Common.csproj", "../CFCacheServer.Common/" ]
-RUN dotnet restore "./CFCacheServer.Server.csproj"
+COPY ["./CFCacheServer.Server/CFCacheServer.Server.csproj", "./CFCacheServer.Server/"]
+COPY ["./CFCacheServer.Common/CFCacheServer.Common.csproj", "./CFCacheServer.Common/"]
+COPY ["./CFConnectionMessaging.Common/CFConnectionMessaging.Common.csproj", "./CFConnectionMessaging.Common/"]
+RUN dotnet restore "./CFCacheServer.Server/CFCacheServer.Server.csproj"
 COPY . .
 WORKDIR "/src/."
-RUN dotnet build "./CFCacheServer.Server.csproj" -c $BUILD_CONFIGURATION -o /app/build
+RUN dotnet build "./CFCacheServer.Server/CFCacheServer.Server.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
 # This stage is used to publish the service project to be copied to the final stage
 FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./CFCacheServer.Server.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "./CFCacheServer.Server/CFCacheServer.Server.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
 # This stage is used in production or when running from VS in regular mode (Default when not using the Debug configuration)
 FROM base AS final

@@ -7,15 +7,28 @@ using CFCacheServer.Common.Interfaces;
 using CFCacheServer.Common.Services;
 using CFCacheServer.Common.Logging;
 using CFCacheServer.Logging;
+using CFCacheServer.Utilities;
 
 internal static class Program
 {
     private static void Main(string[] args)
     {
-        Console.WriteLine($"Starting CF Cache Server");
+        Console.WriteLine($"Starting CF Cache Server ({NetworkUtilities.GetLocalIPV4Addresses()[0].ToString()}");
 
         // Get system config
-        var systemConfig = GetSystemConfig();
+        SystemConfig? systemConfig;
+        try
+        {
+            systemConfig = GetSystemConfig(args);
+        }
+        catch(Exception exception)
+        {
+            Console.WriteLine($"Error getting system configuration: {exception.Message}");
+            throw;
+        }
+
+        // Display config
+        Console.WriteLine($"Local Port={systemConfig.LocalPort}, Max Concurrent Tasks={systemConfig.MaxConcurrentTasks}, Max Log Days={systemConfig.MaxLogDays}");
 
         // Get service provider
         var serviceProvider = CreateServiceProvider();
@@ -31,18 +44,67 @@ internal static class Program
         Console.WriteLine("Terminating CF Cache Server");
     }  
 
-    private static SystemConfig GetSystemConfig()
+    /// <summary>
+    /// Gets system config, defaults from App.config, can be overriden from command line
+    /// </summary>
+    /// <param name="args"></param>
+    /// <returns></returns>
+    private static SystemConfig GetSystemConfig(string[] args)
     {
-        return new SystemConfig()
-        {
+        // Get defaults from config file
+        var systemConfig = new SystemConfig()
+        { 
             LocalPort = Convert.ToInt32(System.Configuration.ConfigurationManager.AppSettings["LocalPort"].ToString()),
+            LogFolder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "Log"),
+            MaxLogDays = Convert.ToInt32(System.Configuration.ConfigurationManager.AppSettings["MaxLogDays"].ToString()),
+            MaxConcurrentTasks = Convert.ToInt32(System.Configuration.ConfigurationManager.AppSettings["MaxConcurrentTasks"].ToString()),
             SecurityKey = System.Configuration.ConfigurationManager.AppSettings["SecurityKey"].ToString()
         };
+
+        // Override with arguments
+        foreach(var arg in args)
+        {
+            if (arg.ToLower().StartsWith("-localport="))
+            {
+                systemConfig.LocalPort = Convert.ToInt32(arg.Trim().Split('=')[1]);
+            }
+            else if (arg.ToLower().StartsWith("-maxconcurrenttasks="))
+            {
+                systemConfig.MaxConcurrentTasks = Convert.ToInt32(arg.Trim().Split('=')[1]);
+            }
+            else if (arg.ToLower().StartsWith("-maxlogdays="))
+            {
+                systemConfig.MaxLogDays = Convert.ToInt32(arg.Trim().Split('=')[1]);
+            }
+            else if (arg.ToLower().StartsWith("-securitykey="))
+            {
+                systemConfig.SecurityKey = arg.Trim().Split('=')[1];
+            }            
+        }
+
+        if (systemConfig.LocalPort <= 0)
+        {
+            throw new ArgumentException($"Local Port config setting is invalid");
+        }
+        if (systemConfig.MaxConcurrentTasks < 0)
+        {
+            throw new ArgumentException($"Max Concurrent Tasks config setting is invalid");
+        }
+        if (systemConfig.MaxLogDays < 0)
+        {
+            throw new ArgumentException($"Max Log Days config setting is invalid");
+        }
+        if (String.IsNullOrEmpty(systemConfig.SecurityKey))
+        {
+            throw new ArgumentException($"Security Key config setting is invalid");
+        }
+
+        return systemConfig;
     }
 
     private static IServiceProvider CreateServiceProvider()
     {
-        var configFolder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "Config");
+        //var configFolder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "Config");
         var logFolder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "Log");
 
         var configuration = new ConfigurationBuilder()
