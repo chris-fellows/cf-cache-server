@@ -6,7 +6,7 @@ namespace CFCacheServer.Common.Interfaces
     /// <summary>
     /// Cache service
     /// </summary>
-    public interface ICacheService
+    public interface ICacheItemService
     {
         /// <summary>
         /// Deletes all cache items
@@ -17,6 +17,7 @@ namespace CFCacheServer.Common.Interfaces
         /// Add item
         /// </summary>
         /// <param name="cacheItem"></param>
+        /// <param name="persist"></param>
         void Add(CacheItem cacheItem);
 
         /// <summary>

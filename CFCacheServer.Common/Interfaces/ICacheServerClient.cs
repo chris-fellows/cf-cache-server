@@ -14,8 +14,9 @@ namespace CFCacheServer.Interfaces
         /// <param name="key"></param>
         /// <param name="value"></param>
         /// <param name="expiry"></param>
+        /// <param name="persist"></param>
         /// <returns></returns>
-        Task AddAsync<T>(string key, T value, TimeSpan expiry);
+        Task AddAsync<T>(string key, T value, TimeSpan expiry, bool persist);
 
         /// <summary>
         /// Deletes all cache items

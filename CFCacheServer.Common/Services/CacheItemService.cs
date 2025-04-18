@@ -1,20 +1,63 @@
-﻿using CFCacheServer.Common.Interfaces;
+﻿using CFCacheServer.Common.Data;
+using CFCacheServer.Common.Interfaces;
 using CFCacheServer.Models;
-using System;
+using Microsoft.EntityFrameworkCore;
 
 namespace CFCacheServer.Common.Services
 {
-    public class MemoryCacheService : ICacheService
+    /// <summary>
+    /// Cache item service. Cache items are stored in memory and some may be persisted
+    /// </summary>
+    public class CacheItemService : ICacheItemService, IDisposable
     {
+        private readonly IDbContextFactory<CFCacheServerDataContext> _dbFactory;
+        private CFCacheServerDataContext? _context;
+
         private Dictionary<string, CacheItem> _cacheItems = new();
 
         private Mutex _mutex = new Mutex();
 
-        private System.Timers.Timer? _timer;        // Initialised when cache contains items
+        private readonly System.Timers.Timer? _timer;        // Initialised when cache contains items
 
-        public MemoryCacheService()
-        { 
-        }     
+        public CacheItemService(IDbContextFactory<CFCacheServerDataContext> dbFactory)
+        {
+            _dbFactory = dbFactory;
+
+            // Load persisted cache items
+            var cacheItems = Context.CacheItem.ToList();
+            foreach(var cacheItem in cacheItems)
+            {
+                _cacheItems.Add(cacheItem.Key, cacheItem);
+            }
+
+
+            // Initialise timer for expiry            
+            _timer = new System.Timers.Timer();
+            _timer.Elapsed += _timer_Elapsed;
+            _timer.Interval = 30000;
+            _timer.Enabled = true;            
+        }
+
+        protected CFCacheServerDataContext Context
+        {
+            get
+            {
+                lock (_dbFactory)
+                {
+                    if (_context == null) _context = _dbFactory.CreateDbContext();
+                    return _context;
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_context != null)
+            {
+                _context.Dispose();
+                _context = null;
+            }
+        }
 
         private void _timer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
         {
@@ -38,7 +81,10 @@ namespace CFCacheServer.Common.Services
             {
                 _mutex.WaitOne();
 
-                _cacheItems.Clear();
+                while (_cacheItems.Any())
+                {
+                    DeleteInternal(_cacheItems.First().Value);                                        
+                }                
             }
             finally
             {
@@ -63,33 +109,24 @@ namespace CFCacheServer.Common.Services
             {
                 if (_cacheItems.ContainsKey(keysToExpire[0]))
                 {                    
-                    _cacheItems.Remove(keysToExpire[0]);
+                    DeleteInternal(_cacheItems[keysToExpire[0]]);
                 }
                 keysToExpire.RemoveAt(0);
             }
         }
 
         public void Add(CacheItem cacheItem)
-        {            
-            // Initialise timer for expiry
-            if (_timer == null)
-            {
-                _timer = new System.Timers.Timer();
-                _timer.Elapsed += _timer_Elapsed;
-                _timer.Interval = 30000;
-                _timer.Enabled = true;
-            }
-
+        {                     
             try
             {                
                 _mutex.WaitOne();
-
-                if (_cacheItems.ContainsKey(cacheItem.Key))
-                {
-                    _cacheItems.Remove(cacheItem.Key);
-                }
                 
-                _cacheItems.Add(cacheItem.Key, cacheItem);                
+                if (_cacheItems.ContainsKey(cacheItem.Key))
+                {             
+                    DeleteInternal(_cacheItems[cacheItem.Key]);                 
+                }
+
+                AddInternal(cacheItem);
             }            
             finally
             {
@@ -115,7 +152,7 @@ namespace CFCacheServer.Common.Services
                    
                     if (IsExpired(cacheItem, DateTimeOffset.UtcNow))
                     {
-                        _cacheItems.Remove(key);
+                        DeleteInternal(cacheItem);                        
                     }
                     else
                     {
@@ -139,7 +176,7 @@ namespace CFCacheServer.Common.Services
 
                 if (_cacheItems.ContainsKey(key))
                 {
-                    _cacheItems.Remove(key);
+                    DeleteInternal(_cacheItems[key]);                    
                 }                
             }
             finally
@@ -214,7 +251,48 @@ namespace CFCacheServer.Common.Services
             }
 
             return true;
-
         }
+
+
+        /// <summary>
+        /// Adds cache item (Memory and DB)
+        /// </summary>
+        /// <param name="cacheItem"></param>
+        private void AddInternal(CacheItem cacheItem)
+        {
+            // Add to DB
+            if (cacheItem.Persist)
+            {                
+                Context.CacheItem.Add(cacheItem);
+                Context.SaveChanges();                
+            }
+
+            // Add to memory            
+            _cacheItems.Add(cacheItem.Key, cacheItem);            
+        }
+
+        /// <summary>
+        /// Deletes cache item (Memory and DB)
+        /// </summary>
+        /// <param name="cacheItem"></param>
+        private void DeleteInternal(CacheItem cacheItem)
+        {
+            // Delete from DB
+            if (cacheItem.Persist)
+            {
+                var item = Context.CacheItem.FirstOrDefault(i => i.Key == cacheItem.Key);
+                if (item != null)
+                {
+                    Context.CacheItem.Remove(item);
+                    Context.SaveChanges();
+                }
+            }
+
+            // Delete from memory
+            if (_cacheItems.ContainsKey(cacheItem.Key))
+            {
+                _cacheItems.Remove(cacheItem.Key);
+            }           
+        }       
     }
 }

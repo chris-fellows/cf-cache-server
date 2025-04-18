@@ -32,7 +32,7 @@ namespace CFCacheServer.Services
             _cacheServerConnection.Dispose();
         }
 
-        public Task AddAsync<T>(string key, T value, TimeSpan expiry)
+        public Task AddAsync<T>(string key, T value, TimeSpan expiry, bool persist)
         {
             if (String.IsNullOrEmpty(key))
             {
@@ -49,7 +49,8 @@ namespace CFCacheServer.Services
                     Key = key,
                     Value = serializer.Serialize(value, value.GetType()),
                     ValueType = value.GetType().AssemblyQualifiedName,
-                    ExpiryMilliseconds = (long)expiry.TotalMilliseconds
+                    ExpiryMilliseconds = (long)expiry.TotalMilliseconds,
+                    Persist = persist
                 }
             };                        
 

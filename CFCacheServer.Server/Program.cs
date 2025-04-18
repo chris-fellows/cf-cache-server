@@ -8,6 +8,8 @@ using CFCacheServer.Common.Services;
 using CFCacheServer.Common.Logging;
 using CFCacheServer.Logging;
 using CFCacheServer.Utilities;
+using CFCacheServer.Common.Data;
+using Microsoft.EntityFrameworkCore;
 
 internal static class Program
 {
@@ -32,17 +34,28 @@ internal static class Program
 
         // Get service provider
         var serviceProvider = CreateServiceProvider();
-        
+
+        // Create database
+        CreateDatabase(serviceProvider);
+
         // Start worker
         var worker = new Worker(systemConfig,
-                            serviceProvider.GetRequiredService<ICacheService>(),
+                            serviceProvider.GetRequiredService<ICacheItemService>(),
                             serviceProvider.GetRequiredService<ISimpleLog>());
 
         var cancellationTokenSource = new CancellationTokenSource();
         worker.Start(cancellationTokenSource);
      
         Console.WriteLine("Terminating CF Cache Server");
-    }  
+    }
+
+    private static void CreateDatabase(IServiceProvider serviceProvider)
+    {
+        using (var context = serviceProvider.GetRequiredService<CFCacheServerDataContext>())
+        {
+            context.Database.EnsureCreated();
+        }
+    }
 
     /// <summary>
     /// Gets system config, defaults from App.config, can be overriden from command line
@@ -104,14 +117,19 @@ internal static class Program
 
     private static IServiceProvider CreateServiceProvider()
     {
-        //var configFolder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "Config");
+        var configFolder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "Config");
         var logFolder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "Log");
+
+        Directory.CreateDirectory(configFolder);
+        Directory.CreateDirectory(logFolder);
+
+        var connectionString = $"Data Source={Path.Combine(configFolder, "CFCacheServer.db")}";
 
         var configuration = new ConfigurationBuilder()
             .Build();
 
         var serviceProvider = new ServiceCollection()
-              .AddSingleton<ICacheService, MemoryCacheService>()
+              .AddSingleton<ICacheItemService, CacheItemService>()
 
               // Add logging (Console & CSV)
               .AddScoped<ISimpleLog>((scope) =>
@@ -121,6 +139,10 @@ internal static class Program
                         new SimpleLogCSV(Path.Combine(logFolder, "CacheServer-{date}.txt"))
                     });
               })
+
+              // Add SQLite EF Core
+              //.AddDbContext<CFMessageQueueDataContext>(options => options.UseSqlite(connectionString), ServiceLifetime.Scoped)
+              .AddDbContextFactory<CFCacheServerDataContext>(options => options.UseSqlite(connectionString), ServiceLifetime.Scoped)
 
             .BuildServiceProvider();
 

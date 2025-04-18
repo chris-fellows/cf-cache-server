@@ -36,7 +36,7 @@ namespace CFCacheServer.MessageConverters
         {
             var externalMessage = new AddCacheItemResponse()
             {
-                Id = connectionMessage.Id
+                Id = connectionMessage.Id                
             };
 
             // Get response

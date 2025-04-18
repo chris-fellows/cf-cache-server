@@ -38,7 +38,7 @@ for(int index = 0; index < 200; index++)
         Int32Value = 1234567
     };
 
-    cacheServerClient.AddAsync($"TestObject{index}", testObject1, TimeSpan.FromHours(12)).Wait();
+    cacheServerClient.AddAsync($"TestObject{index}", testObject1, TimeSpan.FromHours(12), true).Wait();
 }
 
 // Get keys for filter
@@ -48,5 +48,7 @@ stopwatch.Restart();
 var testObjectCached = cacheServerClient.GetByKeyAsync<TestObject?>("TestObject1").Result;
 stopwatch.Stop();
 Console.WriteLine($"Get cache item took {stopwatch.ElapsedMilliseconds} ms");
+
+cacheServerClient.DeleteAsync("TestObject2").Wait();
 
 int xxxx = 1000;

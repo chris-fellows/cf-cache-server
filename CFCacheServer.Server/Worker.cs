@@ -31,17 +31,17 @@ namespace CFCacheServer.Server
 
         private readonly SystemConfig _systemConfig;
 
-        private readonly ICacheService _cacheService;
+        private readonly ICacheItemService _cacheItemService;
 
         private ISimpleLog _log;
 
         private TimeSpan _archiveLogsFrequency = TimeSpan.FromHours(12);
         private DateTimeOffset _lastArchiveLogs = DateTimeOffset.MinValue;
 
-        public Worker(SystemConfig systemConfig, ICacheService cacheService, ISimpleLog log)
+        public Worker(SystemConfig systemConfig, ICacheItemService cacheItemService, ISimpleLog log)
         {
             _systemConfig = systemConfig;
-            _cacheService = cacheService;
+            _cacheItemService = cacheItemService;
             _log = log;
 
             // Handle connection message received
@@ -136,7 +136,7 @@ namespace CFCacheServer.Server
         /// <param name="cancellationTokenSource"></param>
         public void Start(CancellationTokenSource cancellationTokenSource)
         {
-            _log.Log(DateTimeOffset.UtcNow, "Information", "Worker starting");
+            _log.Log(DateTimeOffset.UtcNow, "Information", "Worker starting");            
 
             _cancellationTokenSource = cancellationTokenSource; 
 
@@ -169,27 +169,37 @@ namespace CFCacheServer.Server
             var cancellationToken = _cancellationTokenSource.Token;
 
             // Listen for clients
-            _clientsConnection.StartListening(_systemConfig.LocalPort);            
+            _clientsConnection.StartListening(_systemConfig.LocalPort);
+
+            _log.Log(DateTimeOffset.UtcNow, "Information", $"Loaded {_cacheItemService.ItemCount} cache items");
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                // Process queue
-                while (_queueItems.Any() &&
-                    _queueItemTasks.Count < _systemConfig.MaxConcurrentTasks)
+                try
                 {
-                    if (_queueItems.TryDequeue(out QueueItem queueItem))
+                    // Process queue
+                    while (_queueItems.Any() &&
+                        _queueItemTasks.Count < _systemConfig.MaxConcurrentTasks)
                     {
-                        ProcessQueueItem(queueItem);
+                        if (_queueItems.TryDequeue(out QueueItem queueItem))
+                        {
+                            ProcessQueueItem(queueItem);
+                        }
+
+                        Thread.Sleep(1);
                     }
 
                     Thread.Sleep(1);
+
+                    CheckCompleteQueueItemTasks(_queueItemTasks);
+
+                    Thread.Sleep(1);
                 }
-
-                Thread.Sleep(1);
-
-                CheckCompleteQueueItemTasks(_queueItemTasks);
-
-                Thread.Sleep(1);
+                catch(Exception exception)
+                {
+                    _log.Log(DateTimeOffset.UtcNow, "Error", $"Error in worker: {exception.Message}");
+                    Thread.Sleep(5000);
+                }
             }
 
             // Stop listening
@@ -254,25 +264,29 @@ namespace CFCacheServer.Server
         {
             if (queueItemTask.Task.Exception == null)
             {
-                switch (queueItemTask.QueueItem.ItemType)
-                {
-                    case QueueItemTypes.ConnectionMessage:
-                        //_log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ConnectionMessage.TypeId}");
-                        break;
-                    default:
-                        //_log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ItemType}");
-                        break;
-                }
+                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ItemType}");
+
+                //switch (queueItemTask.QueueItem.ItemType)
+                //{
+                //    case QueueItemTypes.ConnectionMessage:
+                //        //_log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ConnectionMessage.TypeId}");
+                //        break;
+                //    default:
+                //        //_log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ItemType}");
+                //        break;
+                //}
             }
             else
             {
-                //_log.Log(DateTimeOffset.UtcNow, "Error", $"Error processing task {queueItemTask.QueueItem.ItemType}: {queueItemTask.Task.Exception.Message}");
+                _log.Log(DateTimeOffset.UtcNow, "Error", $"Error processing task {queueItemTask.QueueItem.ItemType}: {queueItemTask.Task.Exception.Message}");
             }
         }
         private Task HandleAddCacheItemRequestAsync(AddCacheItemRequest addCacheItemRequest, MessageReceivedInfo messageReceivedInfo)
         {
             return Task.Factory.StartNew(async () =>
             {
+                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing request to add {addCacheItemRequest.CacheItem.Key} to cache ({messageReceivedInfo.RemoteEndpointInfo.Ip}:{messageReceivedInfo.RemoteEndpointInfo.Port})");
+
                 var response = new AddCacheItemResponse()
                 {
                     Response = new MessageResponse()
@@ -289,18 +303,17 @@ namespace CFCacheServer.Server
                     response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
                 }
                 else
-                {
-                    // TODO: Sending DateTimeOffset does not serialize
-                    addCacheItemRequest.CacheItem.CreatedDateTime = DateTimeOffset.UtcNow;
+                {                    
+                    addCacheItemRequest.CacheItem.Id = Guid.NewGuid().ToString();                   
+                    addCacheItemRequest.CacheItem.CreatedDateTime = DateTimeOffset.UtcNow;         // TODO: Sending DateTimeOffset does not serialize
 
-                    // Add cache item
-                    _cacheService.Add(addCacheItemRequest.CacheItem);
-
-                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Adding {addCacheItemRequest.CacheItem.Key} to cache");
+                    _cacheItemService.Add(addCacheItemRequest.CacheItem);                    
                 }
 
                 // Send response
                 _clientsConnection.SendAddCacheItemResponse(response, messageReceivedInfo.RemoteEndpointInfo);
+
+                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed request to add {addCacheItemRequest.CacheItem.Key} to cache");
             });
         }
 
@@ -328,7 +341,7 @@ namespace CFCacheServer.Server
                 else
                 {
                     // Get cache item
-                    response.CacheItem = _cacheService.Get(getCacheItemRequest.ItemKey);
+                    response.CacheItem = _cacheItemService.Get(getCacheItemRequest.ItemKey);
                 }
                 
                 // Send response                
@@ -359,7 +372,7 @@ namespace CFCacheServer.Server
                 }
                 else
                 {
-                    response.ItemKeys = _cacheService.GetKeysByFilter(getCacheItemKeysRequest.Filter);
+                    response.ItemKeys = _cacheItemService.GetKeysByFilter(getCacheItemKeysRequest.Filter);
 
                 }
 
@@ -394,14 +407,14 @@ namespace CFCacheServer.Server
                         _log.Log(DateTimeOffset.UtcNow, "Information", "Cleared cache");
 
                         // Clear
-                        _cacheService.DeleteAll();
+                        _cacheItemService.DeleteAll();
                     }
                     else
                     {
                         _log.Log(DateTimeOffset.UtcNow, "Information", $"Deleted cache item {deleteCacheItemRequest.ItemKey}");
 
                         // Delete cache item
-                        _cacheService.Delete(deleteCacheItemRequest.ItemKey);
+                        _cacheItemService.Delete(deleteCacheItemRequest.ItemKey);
                     }                    
                 }
 
