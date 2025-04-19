@@ -1,15 +1,16 @@
 ﻿using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using CFCacheServer.Interfaces;
 using CFCacheServer.Server.Models;
 using CFCacheServer.Server;
-using CFCacheServer.Common.Interfaces;
-using CFCacheServer.Common.Services;
+using CFCacheServer.Services;
 using CFCacheServer.Common.Logging;
 using CFCacheServer.Logging;
 using CFCacheServer.Utilities;
 using CFCacheServer.Common.Data;
 using Microsoft.EntityFrameworkCore;
+using CFCacheServer.Common.Services;
 
 internal static class Program
 {
@@ -40,7 +41,7 @@ internal static class Program
 
         // Start worker
         var worker = new Worker(systemConfig,
-                            serviceProvider.GetRequiredService<ICacheItemService>(),
+                            serviceProvider.GetRequiredService<ICacheItemServiceManager>(),
                             serviceProvider.GetRequiredService<ISimpleLog>());
 
         var cancellationTokenSource = new CancellationTokenSource();
@@ -129,7 +130,8 @@ internal static class Program
             .Build();
 
         var serviceProvider = new ServiceCollection()
-              .AddSingleton<ICacheItemService, CacheItemService>()
+              .AddSingleton<ICacheItemServiceManager, CacheItemServiceManager>()
+              .AddTransient<ICacheItemService, CacheItemService>()          // Per environment,resolved by ICacheItemServiceManager
 
               // Add logging (Console & CSV)
               .AddScoped<ISimpleLog>((scope) =>

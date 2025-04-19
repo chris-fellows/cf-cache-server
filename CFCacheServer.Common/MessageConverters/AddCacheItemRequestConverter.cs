@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 namespace CFCacheServer.MessageConverters
 {
-    public class AddCacheItemRequestConverter : IExternalMessageConverter<AddCacheItemRequest>
+    internal class AddCacheItemRequestConverter : IExternalMessageConverter<AddCacheItemRequest>
     {
         public ConnectionMessage GetConnectionMessage(AddCacheItemRequest externalMessage)
         {
@@ -29,7 +29,12 @@ namespace CFCacheServer.MessageConverters
                       {
                           Name = "ClientSessionId",
                           Value = externalMessage.ClientSessionId
-                      },                   
+                      },
+                          new ConnectionMessageParameter()
+                      {
+                          Name = "Environment",
+                          Value = externalMessage.Environment
+                      },
                    new ConnectionMessageParameter()
                    {
                        Name = "CacheItem",
@@ -48,7 +53,8 @@ namespace CFCacheServer.MessageConverters
             {
                 Id = connectionMessage.Id,
                 SecurityKey = connectionMessage.Parameters.First(p => p.Name == "SecurityKey").Value,
-                ClientSessionId = connectionMessage.Parameters.First(p => p.Name == "ClientSessionId").Value                
+                ClientSessionId = connectionMessage.Parameters.First(p => p.Name == "ClientSessionId").Value,
+                Environment = connectionMessage.Parameters.First(p => p.Name == "Environment").Value
             };
 
             // Get cache item

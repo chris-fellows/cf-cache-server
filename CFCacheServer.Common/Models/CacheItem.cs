@@ -2,13 +2,18 @@
 
 namespace CFCacheServer.Models
 {
-    [Index(nameof(Key), IsUnique = true)]
+    [Index(nameof(Environment), nameof(Key), IsUnique = true)]
     public class CacheItem
     {
         /// <summary>
         /// Unique Id
         /// </summary>
         public string Id { get; set; } = String.Empty;
+
+        /// <summary>
+        /// Enviroment
+        /// </summary>
+        public string Environment { get; set; } = String.Empty;
 
         /// <summary>
         /// Key

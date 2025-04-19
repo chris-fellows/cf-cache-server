@@ -9,6 +9,8 @@ namespace CFCacheServer.Models
 {
     public class AddCacheItemRequest : MessageBase
     {
+        public string Environment { get; set; } = String.Empty;
+
         public CacheItem CacheItem { get; set; } = new();
 
         public AddCacheItemRequest()

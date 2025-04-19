@@ -9,6 +9,6 @@ namespace CFCacheServer.Server.Enums
     public enum QueueItemTypes
     {
         ArchiveLogs,
-        ConnectionMessage        
+        MessageReceived        
     }
 }

@@ -1,11 +1,6 @@
 ﻿using CFCacheServer.Models;
 using CFConnectionMessaging.Models;
 using CFConnectionMessaging;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CFCacheServer.Server
 {
@@ -18,20 +13,20 @@ namespace CFCacheServer.Server
 
         private MessageConverterList _messageConverterList = new();
 
-        public delegate void ConnectionMessageReceived(ConnectionMessage connectionMessage, MessageReceivedInfo messageReceivedInfo);
-        public event ConnectionMessageReceived? OnConnectionMessageReceived;
+        public delegate void MessageReceived(MessageBase message, MessageReceivedInfo messageReceivedInfo);
+        public event MessageReceived? OnMessageReceived;
 
-        private TimeSpan _responseTimeout = TimeSpan.FromSeconds(30);
+        //private TimeSpan _responseTimeout = TimeSpan.FromSeconds(30);
 
-        private List<MessageBase> _responseMessages = new();
+        //private List<MessageBase> _responseMessages = new();
 
         public ClientsConnection()
         {
             _connection.OnConnectionMessageReceived += delegate (ConnectionMessage connectionMessage, MessageReceivedInfo messageReceivedInfo)
             {
-                if (OnConnectionMessageReceived != null)
+                if (OnMessageReceived != null)
                 {
-                    OnConnectionMessageReceived(connectionMessage, messageReceivedInfo);
+                    OnMessageReceived(_messageConverterList.GetExternalMessage(connectionMessage), messageReceivedInfo);
                 }
             };
         }
@@ -60,24 +55,14 @@ namespace CFCacheServer.Server
             _connection.StopListening();
         }
 
-        public void SendAddCacheItemResponse(AddCacheItemResponse response, EndpointInfo remoteEndpointInfo)
+        /// <summary>
+        /// Send message to remote client
+        /// </summary>
+        /// <param name="externalMessage"></param>
+        /// <param name="remoteEndpointInfo"></param>
+        public void SendMessage(MessageBase externalMessage, EndpointInfo remoteEndpointInfo)
         {
-            _connection.SendMessage(_messageConverterList.AddCacheItemResponseConverter.GetConnectionMessage(response), remoteEndpointInfo);
-        }
-
-        public void SendGetCacheItemResponse(GetCacheItemResponse response, EndpointInfo remoteEndpointInfo)
-        {
-            _connection.SendMessage(_messageConverterList.GetCacheItemResponseConverter.GetConnectionMessage(response), remoteEndpointInfo);
-        }
-
-        public void SendGetCacheItemKeysResponse(GetCacheItemKeysResponse response, EndpointInfo remoteEndpointInfo)
-        {
-            _connection.SendMessage(_messageConverterList.GetCacheItemKeysResponseConverter.GetConnectionMessage(response), remoteEndpointInfo);
-        }
-
-        public void SendDeleteCacheItemResponse(DeleteCacheItemResponse response, EndpointInfo remoteEndpointInfo)
-        {
-            _connection.SendMessage(_messageConverterList.DeleteCacheItemResponseConverter.GetConnectionMessage(response), remoteEndpointInfo);
+            _connection.SendMessage(_messageConverterList.GetConnectionMessage(externalMessage), remoteEndpointInfo);
         }
     }
 }

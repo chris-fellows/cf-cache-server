@@ -9,7 +9,7 @@
         public const string DeleteCacheItemResponse = "DeleteCacheItemResponse";
 
         public const string GetCacheItemKeysRequest = "GetCacheItemKeysRequest";
-        public const string GetCacheItemKeysResponse = "GetCacheItemKeysRequest";
+        public const string GetCacheItemKeysResponse = "GetCacheItemKeysResponse";
 
         public const string GetCacheItemRequest = "GetCacheItemRequest";
         public const string GetCacheItemResponse = "GetCacheItemResponse";

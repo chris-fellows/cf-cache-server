@@ -1,14 +1,6 @@
-﻿using CFCacheServer.Constants;
-using CFCacheServer.Exceptions;
-using CFCacheServer.Models;
+﻿using CFCacheServer.Models;
 using CFConnectionMessaging;
 using CFConnectionMessaging.Models;
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CFCacheServer
 {
@@ -21,25 +13,17 @@ namespace CFCacheServer
 
         private MessageConverterList _messageConverterList = new();
 
-        public delegate void ConnectionMessageReceived(ConnectionMessage connectionMessage, MessageReceivedInfo messageReceivedInfo);
-        public event ConnectionMessageReceived? OnConnectionMessageReceived;
-
-        private TimeSpan _responseTimeout = TimeSpan.FromSeconds(30);
-
-        private List<MessageBase> _responseMessages = new();
-
+        public delegate void MessageReceived(MessageBase messageBase, MessageReceivedInfo messageReceivedInfo);
+        public event MessageReceived? OnMessageReceived;
+        
         public CacheServerConnection()
         {
             _connection.OnConnectionMessageReceived += delegate (ConnectionMessage connectionMessage, MessageReceivedInfo messageReceivedInfo)
             {
-                if (IsResponseMessage(connectionMessage))
+                if (OnMessageReceived != null)
                 {
-                    _responseMessages.Add(GetExternalMessage(connectionMessage));
-                }
-                else if (OnConnectionMessageReceived!= null)
-                {
-                    OnConnectionMessageReceived(connectionMessage, messageReceivedInfo);
-                }
+                    OnMessageReceived(_messageConverterList.GetExternalMessage(connectionMessage), messageReceivedInfo);
+                }                
             };
         }
 
@@ -62,165 +46,14 @@ namespace CFCacheServer
         }
 
         public void StopListening()
-        {
+        {            
             //_log.Log(DateTimeOffset.UtcNow, "Information", "Stopping listening");
             _connection.StopListening();
-        }
+        }    
 
-        private bool IsResponseMessage(ConnectionMessage connectionMessage)
+        public void SendMessage(MessageBase externalMessage, EndpointInfo remoteEndpointInfo)
         {
-            var responseMessageTypeIds = new[]
-            {
-                MessageTypeIds.AddCacheItemResponse,
-                MessageTypeIds.DeleteCacheItemResponse,
-                MessageTypeIds.GetCacheItemKeysResponse,
-                MessageTypeIds.GetCacheItemResponse
-            };
-
-            return responseMessageTypeIds.Contains(connectionMessage.TypeId);
-        }
-
-        public AddCacheItemResponse SendAddCacheItemRequst(AddCacheItemRequest request, EndpointInfo remoteEndpointInfo)
-        {
-            _connection.SendMessage(_messageConverterList.AddCacheItemRequestConverter.GetConnectionMessage(request), remoteEndpointInfo);
-
-            // Wait for response
-            var responseMessages = new List<MessageBase>();
-            var isGotAllMessages = WaitForResponses(request, _responseTimeout, _responseMessages,
-                  (responseMessage) =>
-                  {
-                      responseMessages.Add(responseMessage);
-                  });
-
-
-            if (isGotAllMessages)
-            {
-                return (AddCacheItemResponse)responseMessages.First();
-            }
-
-            throw new MessageConnectionException("No response to add cache item");
-        }
-
-        public DeleteCacheItemResponse SendDeleteCacheItemRequst(DeleteCacheItemRequest request, EndpointInfo remoteEndpointInfo)
-        {
-            _connection.SendMessage(_messageConverterList.DeleteCacheItemRequestConverter.GetConnectionMessage(request), remoteEndpointInfo);
-
-            // Wait for response
-            var responseMessages = new List<MessageBase>();
-            var isGotAllMessages = WaitForResponses(request, _responseTimeout, _responseMessages,
-                  (responseMessage) =>
-                  {
-                      responseMessages.Add(responseMessage);
-                  });
-
-
-            if (isGotAllMessages)
-            {
-                return (DeleteCacheItemResponse)responseMessages.First();
-            }
-
-            throw new MessageConnectionException("No response to delete cache item");
-        }
-
-        public GetCacheItemResponse SendGetCacheItemRequst(GetCacheItemRequest request, EndpointInfo remoteEndpointInfo)
-        {
-            _connection.SendMessage(_messageConverterList.GetCacheItemRequestConverter.GetConnectionMessage(request), remoteEndpointInfo);
-
-            // Wait for response
-            var responseMessages = new List<MessageBase>();
-            var isGotAllMessages = WaitForResponses(request, _responseTimeout, _responseMessages,
-                  (responseMessage) =>
-                  {
-                      responseMessages.Add(responseMessage);
-                  });
-
-
-            if (isGotAllMessages)
-            {
-                return (GetCacheItemResponse)responseMessages.First();
-            }
-
-            throw new MessageConnectionException("No response to get cache item");
-        }
-
-        public GetCacheItemKeysResponse SendGetCacheItemKeysRequst(GetCacheItemKeysRequest request, EndpointInfo remoteEndpointInfo)
-        {
-            _connection.SendMessage(_messageConverterList.GetCacheItemKeysRequestConverter.GetConnectionMessage(request), remoteEndpointInfo);
-
-            // Wait for response
-            var responseMessages = new List<MessageBase>();
-            var isGotAllMessages = WaitForResponses(request, _responseTimeout, _responseMessages,
-                  (responseMessage) =>
-                  {
-                      responseMessages.Add(responseMessage);
-                  });
-
-
-            if (isGotAllMessages)
-            {
-                return (GetCacheItemKeysResponse)responseMessages.First();
-            }
-
-            throw new MessageConnectionException("No response to get cache item keys");
-        }
-
-        /// <summary>
-        /// Waits for all responses for request until completed or timeout. Where multiple responses are required then
-        /// MessageBase.Response.IsMore=true for all except the last one.
-        /// </summary>
-        /// <param name="request">Request to check</param>
-        /// <param name="timeout">Timeout receiving responses</param>
-        /// <param name="responseMessagesToCheck">List where responses are added</param>
-        /// <param name="responseMessageAction">Action to forward next response</param>
-        /// <returns>Whether all responses received</returns>
-        private static bool WaitForResponses(MessageBase request, TimeSpan timeout,
-                                      List<MessageBase> responseMessagesToCheck,
-                                      Action<MessageBase> responseMessageAction)
-        {
-            var stopwatch = new Stopwatch();
-            stopwatch.Start();
-
-            var isGotAllResponses = false;
-            while (!isGotAllResponses &&
-                    stopwatch.Elapsed < timeout)
-            {
-                // Check for next response message
-                var responseMessage = responseMessagesToCheck.FirstOrDefault(m => m.Response != null && m.Response.MessageId == request.Id);
-
-                if (responseMessage != null)
-                {
-                    // Discard
-                    responseMessagesToCheck.Remove(responseMessage);
-
-                    // Check if last response
-                    isGotAllResponses = !responseMessage.Response.IsMore;
-
-                    // Pass response to caller
-                    responseMessageAction(responseMessage);
-                }
-
-                if (!isGotAllResponses) Thread.Sleep(20);
-            }
-
-            return isGotAllResponses;
-        }
-
-        public MessageBase? GetExternalMessage(ConnectionMessage connectionMessage)
-        {
-            switch (connectionMessage.TypeId)
-            {
-                case MessageTypeIds.AddCacheItemResponse:
-                    return _messageConverterList.AddCacheItemResponseConverter.GetExternalMessage(connectionMessage);
-                case MessageTypeIds.DeleteCacheItemResponse:
-                    return _messageConverterList.DeleteCacheItemResponseConverter.GetExternalMessage(connectionMessage);
-                case MessageTypeIds.GetCacheItemKeysResponse:
-                    return _messageConverterList.GetCacheItemKeysResponseConverter.GetExternalMessage(connectionMessage);
-                case MessageTypeIds.GetCacheItemResponse:
-                    return _messageConverterList.GetCacheItemResponseConverter.GetExternalMessage(connectionMessage);
-            }
-
-            return null;
-        }
-
+            _connection.SendMessage(_messageConverterList.GetConnectionMessage(externalMessage), remoteEndpointInfo);
+        }     
     }
 }

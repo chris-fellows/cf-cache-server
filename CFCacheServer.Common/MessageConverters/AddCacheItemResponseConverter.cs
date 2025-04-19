@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 namespace CFCacheServer.MessageConverters
 {
-    public class AddCacheItemResponseConverter : IExternalMessageConverter<AddCacheItemResponse>
+    internal class AddCacheItemResponseConverter : IExternalMessageConverter<AddCacheItemResponse>
     {
         public ConnectionMessage GetConnectionMessage(AddCacheItemResponse externalMessage)
         {

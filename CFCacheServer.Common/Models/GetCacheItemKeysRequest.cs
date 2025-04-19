@@ -9,6 +9,8 @@ namespace CFCacheServer.Models
 {
     public class GetCacheItemKeysRequest : MessageBase
     {
+        public string Environment { get; set; } = String.Empty;
+
         public CacheItemFilter? Filter { get; set; }
 
         public GetCacheItemKeysRequest()

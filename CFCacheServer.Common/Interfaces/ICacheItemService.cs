@@ -1,13 +1,18 @@
 ﻿using CFCacheServer.Models;
 using System.Net;
 
-namespace CFCacheServer.Common.Interfaces
+namespace CFCacheServer.Interfaces
 {
     /// <summary>
     /// Cache service
     /// </summary>
     public interface ICacheItemService
     {
+        /// <summary>
+        /// Environment
+        /// </summary>
+        string Environment { get; set; }
+
         /// <summary>
         /// Deletes all cache items
         /// </summary>

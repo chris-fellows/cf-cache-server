@@ -5,7 +5,7 @@ using CFConnectionMessaging.Models;
 
 namespace CFCacheServer.MessageConverters
 {
-    public class DeleteCacheItemResponseConverter : IExternalMessageConverter<DeleteCacheItemResponse>
+    internal class DeleteCacheItemResponseConverter : IExternalMessageConverter<DeleteCacheItemResponse>
     {           
         public ConnectionMessage GetConnectionMessage(DeleteCacheItemResponse externalMessage)
         {

@@ -1,6 +1,6 @@
-﻿using CFCacheServer.Common.Interfaces;
-using CFCacheServer.Constants;
+﻿using CFCacheServer.Constants;
 using CFCacheServer.Enums;
+using CFCacheServer.Interfaces;
 using CFCacheServer.Logging;
 using CFCacheServer.Models;
 using CFCacheServer.Server.Enums;
@@ -31,28 +31,28 @@ namespace CFCacheServer.Server
 
         private readonly SystemConfig _systemConfig;
 
-        private readonly ICacheItemService _cacheItemService;
+        private readonly ICacheItemServiceManager _cacheItemServiceManager;
 
         private ISimpleLog _log;
 
         private TimeSpan _archiveLogsFrequency = TimeSpan.FromHours(12);
         private DateTimeOffset _lastArchiveLogs = DateTimeOffset.MinValue;
 
-        public Worker(SystemConfig systemConfig, ICacheItemService cacheItemService, ISimpleLog log)
+        public Worker(SystemConfig systemConfig, ICacheItemServiceManager cacheItemServiceManager, ISimpleLog log)
         {
             _systemConfig = systemConfig;
-            _cacheItemService = cacheItemService;
+            _cacheItemServiceManager = cacheItemServiceManager;
             _log = log;
 
-            // Handle connection message received
-            _clientsConnection.OnConnectionMessageReceived += delegate (ConnectionMessage connectionMessage, MessageReceivedInfo messageReceivedInfo)
+            // Handle message received
+            _clientsConnection.OnMessageReceived += delegate (MessageBase message, MessageReceivedInfo messageReceivedInfo)
             {
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Received message {connectionMessage.TypeId} from {messageReceivedInfo.RemoteEndpointInfo.Ip}:{messageReceivedInfo.RemoteEndpointInfo.Port}");
+                //_log.Log(DateTimeOffset.UtcNow, "Information", $"Received message {message.TypeId} from {messageReceivedInfo.RemoteEndpointInfo.Ip}:{messageReceivedInfo.RemoteEndpointInfo.Port}");
 
                 var queueItem = new QueueItem()
                 {
-                    ItemType = QueueItemTypes.ConnectionMessage,
-                    ConnectionMessage = connectionMessage,
+                    ItemType = QueueItemTypes.MessageReceived,
+                    Message = message,
                     MessageReceivedInfo = messageReceivedInfo
                 };
                 _queueItems.Enqueue(queueItem);                
@@ -169,9 +169,7 @@ namespace CFCacheServer.Server
             var cancellationToken = _cancellationTokenSource.Token;
 
             // Listen for clients
-            _clientsConnection.StartListening(_systemConfig.LocalPort);
-
-            _log.Log(DateTimeOffset.UtcNow, "Information", $"Loaded {_cacheItemService.ItemCount} cache items");
+            _clientsConnection.StartListening(_systemConfig.LocalPort);            
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -212,30 +210,25 @@ namespace CFCacheServer.Server
         /// <param name="queueItem"></param>
         private void ProcessQueueItem(QueueItem queueItem)
         {
-            if (queueItem.ItemType == QueueItemTypes.ConnectionMessage && queueItem.ConnectionMessage != null)
+            if (queueItem.ItemType == QueueItemTypes.MessageReceived && queueItem.Message != null)
             {
-                switch (queueItem.ConnectionMessage.TypeId)
+                switch (queueItem.Message.TypeId)
                 {
-                    case MessageTypeIds.AddCacheItemRequest:
-                        var addCacheItemRequest = _clientsConnection.MessageConverterList.AddCacheItemRequestConverter.GetExternalMessage(queueItem.ConnectionMessage);
-                        _queueItemTasks.Add(new QueueItemTask(HandleAddCacheItemRequestAsync(addCacheItemRequest, queueItem.MessageReceivedInfo), queueItem));
+                    case MessageTypeIds.AddCacheItemRequest:                        
+                        _queueItemTasks.Add(new QueueItemTask(HandleAddCacheItemRequestAsync((AddCacheItemRequest)queueItem.Message, queueItem.MessageReceivedInfo!), queueItem));
                         break;
 
-                    case MessageTypeIds.DeleteCacheItemRequest:
-                        var deleteCacheItemRequest = _clientsConnection.MessageConverterList.DeleteCacheItemRequestConverter.GetExternalMessage(queueItem.ConnectionMessage);
-                        _queueItemTasks.Add(new QueueItemTask(HandleDeleteCacheItemRequestAsync(deleteCacheItemRequest, queueItem.MessageReceivedInfo), queueItem));
+                    case MessageTypeIds.DeleteCacheItemRequest:                        
+                        _queueItemTasks.Add(new QueueItemTask(HandleDeleteCacheItemRequestAsync((DeleteCacheItemRequest)queueItem.Message, queueItem.MessageReceivedInfo!), queueItem));
                         break;
 
-                    case MessageTypeIds.GetCacheItemKeysRequest:
-                        var getCacheItemKeysRequest = _clientsConnection.MessageConverterList.GetCacheItemKeysRequestConverter.GetExternalMessage(queueItem.ConnectionMessage);
-                        _queueItemTasks.Add(new QueueItemTask(HandleGetCacheItemKeysRequestAsync(getCacheItemKeysRequest, queueItem.MessageReceivedInfo), queueItem));
+                    case MessageTypeIds.GetCacheItemKeysRequest:                        
+                        _queueItemTasks.Add(new QueueItemTask(HandleGetCacheItemKeysRequestAsync((GetCacheItemKeysRequest)queueItem.Message, queueItem.MessageReceivedInfo!), queueItem));
                         break;
 
-                    case MessageTypeIds.GetCacheItemRequest:
-                        var getCacheItemRequest = _clientsConnection.MessageConverterList.GetCacheItemRequestConverter.GetExternalMessage(queueItem.ConnectionMessage);
-                        _queueItemTasks.Add(new QueueItemTask(HandleGetCacheItemRequestAsync(getCacheItemRequest, queueItem.MessageReceivedInfo), queueItem));
+                    case MessageTypeIds.GetCacheItemRequest:                        
+                        _queueItemTasks.Add(new QueueItemTask(HandleGetCacheItemRequestAsync((GetCacheItemRequest)queueItem.Message, queueItem.MessageReceivedInfo!), queueItem));
                         break;
-
                 }
             }
             else if (queueItem.ItemType == QueueItemTypes.ArchiveLogs)
@@ -283,7 +276,7 @@ namespace CFCacheServer.Server
         }
         private Task HandleAddCacheItemRequestAsync(AddCacheItemRequest addCacheItemRequest, MessageReceivedInfo messageReceivedInfo)
         {
-            return Task.Factory.StartNew(async () =>
+            return Task.Run(() =>
             {
                 _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing request to add {addCacheItemRequest.CacheItem.Key} to cache ({messageReceivedInfo.RemoteEndpointInfo.Ip}:{messageReceivedInfo.RemoteEndpointInfo.Port})");
 
@@ -307,11 +300,13 @@ namespace CFCacheServer.Server
                     addCacheItemRequest.CacheItem.Id = Guid.NewGuid().ToString();                   
                     addCacheItemRequest.CacheItem.CreatedDateTime = DateTimeOffset.UtcNow;         // TODO: Sending DateTimeOffset does not serialize
 
-                    _cacheItemService.Add(addCacheItemRequest.CacheItem);                    
+                    var cacheItemService = _cacheItemServiceManager.GetByEnvironment(addCacheItemRequest.Environment, true)!;
+
+                    cacheItemService.Add(addCacheItemRequest.CacheItem);                    
                 }
 
                 // Send response
-                _clientsConnection.SendAddCacheItemResponse(response, messageReceivedInfo.RemoteEndpointInfo);
+                _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
 
                 _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed request to add {addCacheItemRequest.CacheItem.Key} to cache");
             });
@@ -319,9 +314,9 @@ namespace CFCacheServer.Server
 
         private Task HandleGetCacheItemRequestAsync(GetCacheItemRequest getCacheItemRequest, MessageReceivedInfo messageReceivedInfo)
         {
-            return Task.Factory.StartNew(async () =>
+            return Task.Run(() =>
             {
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing {getCacheItemRequest.TypeId} {getCacheItemRequest.ItemKey}");
+                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing {getCacheItemRequest.TypeId} {getCacheItemRequest.ItemKey} {getCacheItemRequest.Environment}");
 
                 var response = new GetCacheItemResponse()
                 {
@@ -340,18 +335,20 @@ namespace CFCacheServer.Server
                 }
                 else
                 {
+                    var cacheItemService = _cacheItemServiceManager.GetByEnvironment(getCacheItemRequest.Environment, true);
+
                     // Get cache item
-                    response.CacheItem = _cacheItemService.Get(getCacheItemRequest.ItemKey);
+                    response.CacheItem = cacheItemService.Get(getCacheItemRequest.ItemKey);                   
                 }
                 
                 // Send response                
-                _clientsConnection.SendGetCacheItemResponse(response, messageReceivedInfo.RemoteEndpointInfo);                
+                _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);                
             });
         }
 
         private Task HandleGetCacheItemKeysRequestAsync(GetCacheItemKeysRequest getCacheItemKeysRequest, MessageReceivedInfo messageReceivedInfo)
         {
-            return Task.Factory.StartNew(async () =>
+            return Task.Run(() =>
             {
                 _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing {getCacheItemKeysRequest.TypeId}");
 
@@ -372,18 +369,19 @@ namespace CFCacheServer.Server
                 }
                 else
                 {
-                    response.ItemKeys = _cacheItemService.GetKeysByFilter(getCacheItemKeysRequest.Filter);
+                    var cacheItemService = _cacheItemServiceManager.GetByEnvironment(getCacheItemKeysRequest.Environment, true);
 
+                    response.ItemKeys = cacheItemService.GetKeysByFilter(getCacheItemKeysRequest.Filter);
                 }
 
                 // Send response                
-                _clientsConnection.SendGetCacheItemKeysResponse(response, messageReceivedInfo.RemoteEndpointInfo);
+                _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
             });
         }
 
         private Task HandleDeleteCacheItemRequestAsync(DeleteCacheItemRequest deleteCacheItemRequest, MessageReceivedInfo messageReceivedInfo)
         {
-            return Task.Factory.StartNew(async () =>
+            return Task.Run(() =>
             {
                 var response = new DeleteCacheItemResponse()                        
                 {
@@ -402,24 +400,26 @@ namespace CFCacheServer.Server
                 }
                 else
                 {
+                    var cacheItemService = _cacheItemServiceManager.GetByEnvironment(deleteCacheItemRequest.Environment, true);
+
                     if (String.IsNullOrEmpty(deleteCacheItemRequest.ItemKey))
                     {
                         _log.Log(DateTimeOffset.UtcNow, "Information", "Cleared cache");
 
                         // Clear
-                        _cacheItemService.DeleteAll();
+                        cacheItemService.DeleteAll();
                     }
                     else
                     {
                         _log.Log(DateTimeOffset.UtcNow, "Information", $"Deleted cache item {deleteCacheItemRequest.ItemKey}");
 
                         // Delete cache item
-                        _cacheItemService.Delete(deleteCacheItemRequest.ItemKey);
+                        cacheItemService.Delete(deleteCacheItemRequest.ItemKey);
                     }                    
                 }
 
                 // Send response
-                _clientsConnection.SendDeleteCacheItemResponse(response, messageReceivedInfo.RemoteEndpointInfo);
+                _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
             });
         }
 
@@ -429,7 +429,7 @@ namespace CFCacheServer.Server
         /// <returns></returns>
         private Task ArchiveLogsAsync()
         {
-            return Task.Factory.StartNew(() =>
+            return Task.Run(() =>
             {
                 for (int days = _systemConfig.MaxLogDays; days < _systemConfig.MaxLogDays + 30; days++)
                 {

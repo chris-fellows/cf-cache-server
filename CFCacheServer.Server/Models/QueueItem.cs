@@ -1,10 +1,6 @@
 ﻿using CFConnectionMessaging.Models;
 using CFCacheServer.Server.Enums;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using CFCacheServer.Models;
 
 namespace CFCacheServer.Server.Models
 {
@@ -12,7 +8,7 @@ namespace CFCacheServer.Server.Models
     {
         public QueueItemTypes ItemType { get; set; }
 
-        public ConnectionMessage? ConnectionMessage { get; set; }
+        public MessageBase? Message { get; set; }
 
         public MessageReceivedInfo? MessageReceivedInfo { get; set; }
     }

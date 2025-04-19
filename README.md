@@ -6,7 +6,7 @@ Cache items can have an expiry time and can be persisted.
 
 Cache Server
 ------------
-Hosts the cache.
+Hosts cache for each environment.
 
 Cache Server Client
 -------------------

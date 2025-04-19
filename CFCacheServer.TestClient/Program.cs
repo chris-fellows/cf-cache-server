@@ -6,6 +6,10 @@ using CFCacheServer.TestClient.Models;
 using CFConnectionMessaging.Models;
 using System.Diagnostics;
 
+// Set two environments
+var environment1 = "ENV1";
+var environment2 = "ENV2";
+
 var remoteEndpointInfo = new EndpointInfo()
 {
     Ip = "192.168.1.45",
@@ -15,6 +19,7 @@ var securityKey = "ABCDE";
 
 // Initialise cache server client
 var cacheServerClient = new CacheServerClient(remoteEndpointInfo, NetworkUtilities.GetFreeLocalPort(10000, 10100, new()), securityKey);
+cacheServerClient.Environment = environment1;
 
 var testObject = new TestObject()
 {
@@ -29,7 +34,7 @@ var stopwatch = new Stopwatch();
 //stopwatch.Stop();
 //Console.WriteLine($"Add cache item took {stopwatch.ElapsedMilliseconds} ms");
 
-for(int index = 0; index < 200; index++)
+for(int index = 0; index < 50; index++)
 {
     var testObject1 = new TestObject()
     {
@@ -38,7 +43,9 @@ for(int index = 0; index < 200; index++)
         Int32Value = 1234567
     };
 
-    cacheServerClient.AddAsync($"TestObject{index}", testObject1, TimeSpan.FromHours(12), true).Wait();
+    var task = cacheServerClient.AddAsync($"TestObject{index}", testObject1, TimeSpan.FromHours(12), true);
+    var result = task.Result;
+    int zzzz = 1000;
 }
 
 // Get keys for filter
