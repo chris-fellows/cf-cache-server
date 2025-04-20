@@ -7,10 +7,11 @@ using CFCacheServer.Server.Enums;
 using CFCacheServer.Server.Models;
 using CFCacheServer.Utilities;
 using CFConnectionMessaging.Models;
-using System;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using System.Collections.Concurrent;
+using System.ComponentModel.Design;
+using System.Diagnostics.Eventing.Reader;
 using System.Runtime.Loader;
-using System.Threading;
 
 namespace CFCacheServer.Server
 {
@@ -38,11 +39,20 @@ namespace CFCacheServer.Server
         private TimeSpan _archiveLogsFrequency = TimeSpan.FromHours(12);
         private DateTimeOffset _lastArchiveLogs = DateTimeOffset.MinValue;
 
-        public Worker(SystemConfig systemConfig, ICacheItemServiceManager cacheItemServiceManager, ISimpleLog log)
+        private TimeSpan _checkCacheSizeFrequency = TimeSpan.FromMinutes(10);
+        private DateTimeOffset _lastCheckCacheSize = DateTimeOffset.MinValue;
+
+        private List<CacheEnvironment> _cacheEnvironments = new();
+
+        public Worker(SystemConfig systemConfig, ICacheEnvironmentService cacheEnvironmentService,
+                                    ICacheItemServiceManager cacheItemServiceManager, ISimpleLog log)
         {
             _systemConfig = systemConfig;
             _cacheItemServiceManager = cacheItemServiceManager;
             _log = log;
+
+            // Get all cache environments
+            _cacheEnvironments = cacheEnvironmentService.GetAll();
 
             // Handle message received
             _clientsConnection.OnMessageReceived += delegate (MessageBase message, MessageReceivedInfo messageReceivedInfo)
@@ -99,6 +109,16 @@ namespace CFCacheServer.Server
                 }
 
                 Thread.Yield();
+
+                // Periodically check cache size
+                if (_lastCheckCacheSize.Add(_checkCacheSizeFrequency) <= DateTimeOffset.UtcNow &&
+                    !_queueItems.Any(i => i.ItemType == QueueItemTypes.CheckCacheSize))
+                {
+                    _lastCheckCacheSize = DateTimeOffset.UtcNow;
+                    _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.CheckCacheSize });
+                }
+                     
+                Thread.Yield();
             }
         }
 
@@ -122,6 +142,16 @@ namespace CFCacheServer.Server
                     {
                         _lastArchiveLogs = DateTimeOffset.UtcNow;
                         _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.ArchiveLogs });
+                    }
+
+                    Thread.Yield();
+
+                    // Periodically check cache size
+                    if (_lastCheckCacheSize.Add(_checkCacheSizeFrequency) <= DateTimeOffset.UtcNow &&
+                        !_queueItems.Any(i => i.ItemType == QueueItemTypes.CheckCacheSize))
+                    {
+                        _lastCheckCacheSize = DateTimeOffset.UtcNow;
+                        _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.CheckCacheSize });
                     }
 
                     Thread.Yield();
@@ -234,7 +264,11 @@ namespace CFCacheServer.Server
             else if (queueItem.ItemType == QueueItemTypes.ArchiveLogs)
             {
                 _queueItemTasks.Add(new QueueItemTask(ArchiveLogsAsync(), queueItem));
-            }          
+            }
+            else if (queueItem.ItemType == QueueItemTypes.CheckCacheSize)
+            {
+                _queueItemTasks.Add(new QueueItemTask(CheckCacheSizeAsync(), queueItem));
+            }
         }
 
         private void CheckCompleteQueueItemTasks(List<QueueItemTask> queueItemTasks)
@@ -257,17 +291,7 @@ namespace CFCacheServer.Server
         {
             if (queueItemTask.Task.Exception == null)
             {
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ItemType}");
-
-                //switch (queueItemTask.QueueItem.ItemType)
-                //{
-                //    case QueueItemTypes.ConnectionMessage:
-                //        //_log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ConnectionMessage.TypeId}");
-                //        break;
-                //    default:
-                //        //_log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ItemType}");
-                //        break;
-                //}
+                //_log.Log(DateTimeOffset.UtcNow, "Information", $"Processed task {queueItemTask.QueueItem.ItemType}");
             }
             else
             {
@@ -289,26 +313,64 @@ namespace CFCacheServer.Server
                         Sequence = 1
                     },
                 };
-             
-                if (addCacheItemRequest.SecurityKey != _systemConfig.SecurityKey)
+
+                try
                 {
-                    response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
-                    response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                    // Get cache environment                    
+                    var cacheEnvironment = GetCacheEnvironmentBySecurityKey(addCacheItemRequest.SecurityKey);
+                    
+                    // Get cache item service for environment (Might not exist)
+                    var cacheItemService = cacheEnvironment == null ? null : _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id);                    
+
+                    if (cacheEnvironment == null)
+                    {                        
+                        response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
+                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                    }
+                    else if (cacheItemService == null)
+                    {
+                        response.Response.ErrorCode = ResponseErrorCodes.CacheEnvironmentNotFound;
+                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                    }
+                    else if (String.IsNullOrWhiteSpace(addCacheItemRequest.CacheItem.Key))
+                    {
+                        response.Response.ErrorCode = ResponseErrorCodes.InvalidParameters;
+                        response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: Key is not set";
+                    }
+                    else if (cacheEnvironment.MaxKeyLength > 0 &&
+                        addCacheItemRequest.CacheItem.Key.Length > cacheEnvironment.MaxKeyLength)
+                    {
+                        response.Response.ErrorCode = ResponseErrorCodes.InvalidParameters;
+                        response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: Key is too long";
+                    }
+                    else if (cacheEnvironment.MaxSize > 0 &&
+                        cacheItemService.TotalSize + addCacheItemRequest.CacheItem.GetTotalSize() > cacheEnvironment.MaxSize)
+                    {
+                        response.Response.ErrorCode = ResponseErrorCodes.CacheFull;
+                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                    }
+                    else
+                    {
+                        // Set cache item properties before saving
+                        addCacheItemRequest.CacheItem.Id = Guid.NewGuid().ToString();
+                        addCacheItemRequest.CacheItem.CreatedDateTime = DateTimeOffset.UtcNow;         // TODO: Sending DateTimeOffset does not serialize                    
+                        addCacheItemRequest.CacheItem.CacheEnvironmentId = cacheEnvironment.Id;
+
+                        cacheItemService.Add(addCacheItemRequest.CacheItem);
+                    }
                 }
-                else
-                {                    
-                    addCacheItemRequest.CacheItem.Id = Guid.NewGuid().ToString();                   
-                    addCacheItemRequest.CacheItem.CreatedDateTime = DateTimeOffset.UtcNow;         // TODO: Sending DateTimeOffset does not serialize
-
-                    var cacheItemService = _cacheItemServiceManager.GetByEnvironment(addCacheItemRequest.Environment, true)!;
-
-                    cacheItemService.Add(addCacheItemRequest.CacheItem);                    
+                catch (Exception exception)
+                {
+                    response.Response.ErrorCode = ResponseErrorCodes.Unknown;
+                    response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: {exception.Message}";
                 }
+                finally
+                {
+                    // Send response
+                    _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
 
-                // Send response
-                _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
-
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed request to add {addCacheItemRequest.CacheItem.Key} to cache");
+                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed request to add {addCacheItemRequest.CacheItem.Key} to cache");
+                }
             });
         }
 
@@ -328,21 +390,42 @@ namespace CFCacheServer.Server
                     },
                 };
 
-                if (getCacheItemRequest.SecurityKey != _systemConfig.SecurityKey)
+                try
                 {
-                    response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
-                    response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                }
-                else
-                {
-                    var cacheItemService = _cacheItemServiceManager.GetByEnvironment(getCacheItemRequest.Environment, true);
+                    // Get cache environment
+                    var cacheEnvironment = GetCacheEnvironmentBySecurityKey(getCacheItemRequest.SecurityKey);
 
-                    // Get cache item
-                    response.CacheItem = cacheItemService.Get(getCacheItemRequest.ItemKey);                   
+                    // Get cache item service for environment (Might not exist)
+                    var cacheItemService = cacheEnvironment == null ? null : _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id);
+
+                    if (cacheEnvironment == null)
+                    {
+                        response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
+                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                    }
+                    else if (cacheItemService == null)
+                    {
+                        response.Response.ErrorCode = ResponseErrorCodes.CacheEnvironmentNotFound;
+                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                    }
+                    else
+                    {
+                        // Get cache item
+                        response.CacheItem = cacheItemService.Get(getCacheItemRequest.ItemKey);
+                    }
                 }
-                
-                // Send response                
-                _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);                
+                catch (Exception exception)
+                {
+                    response.Response.ErrorCode = ResponseErrorCodes.Unknown;
+                    response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: {exception.Message}";
+                }
+                finally
+                {
+                    // Send response
+                    _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
+
+                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed request to get cache item {getCacheItemRequest.ItemKey}");
+                }
             });
         }
 
@@ -362,20 +445,42 @@ namespace CFCacheServer.Server
                     },
                 };
 
-                if (getCacheItemKeysRequest.SecurityKey != _systemConfig.SecurityKey)
+                try
                 {
-                    response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
-                    response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+
+                    // Get cache environment
+                    var cacheEnvironment = GetCacheEnvironmentBySecurityKey(getCacheItemKeysRequest.SecurityKey);
+
+                    // Get cache item service for environment (Might not exist)
+                    var cacheItemService = cacheEnvironment == null ? null : _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id);
+
+                    if (cacheEnvironment == null)
+                    {
+                        response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
+                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                    }
+                    else if (cacheItemService == null)
+                    {
+                        response.Response.ErrorCode = ResponseErrorCodes.CacheEnvironmentNotFound;
+                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
+                    }
+                    else
+                    {
+                        response.ItemKeys = cacheItemService.GetKeysByFilter(getCacheItemKeysRequest.Filter);
+                    }
                 }
-                else
+                catch (Exception exception)
                 {
-                    var cacheItemService = _cacheItemServiceManager.GetByEnvironment(getCacheItemKeysRequest.Environment, true);
-
-                    response.ItemKeys = cacheItemService.GetKeysByFilter(getCacheItemKeysRequest.Filter);
+                    response.Response.ErrorCode = ResponseErrorCodes.Unknown;
+                    response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: {exception.Message}";
                 }
+                finally
+                {
+                    // Send response
+                    _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
 
-                // Send response                
-                _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
+                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed {getCacheItemKeysRequest.TypeId}");
+                }
             });
         }
 
@@ -383,6 +488,8 @@ namespace CFCacheServer.Server
         {
             return Task.Run(() =>
             {
+                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing {deleteCacheItemRequest.TypeId}");
+
                 var response = new DeleteCacheItemResponse()                        
                 {
                     Response = new MessageResponse()
@@ -393,33 +500,49 @@ namespace CFCacheServer.Server
                     },
                 };
 
-                if (deleteCacheItemRequest.SecurityKey != _systemConfig.SecurityKey)
+                try
                 {
-                    response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
-                    response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                }
-                else
-                {
-                    var cacheItemService = _cacheItemServiceManager.GetByEnvironment(deleteCacheItemRequest.Environment, true);
+                    // Get cache environment
+                    var cacheEnvironment = GetCacheEnvironmentBySecurityKey(deleteCacheItemRequest.SecurityKey);
 
-                    if (String.IsNullOrEmpty(deleteCacheItemRequest.ItemKey))
+                    // Get cache item service for environment (Might not exist)
+                    var cacheItemService = cacheEnvironment == null ? null : _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id);
+
+                    if (cacheEnvironment == null)
                     {
-                        _log.Log(DateTimeOffset.UtcNow, "Information", "Cleared cache");
-
-                        // Clear
-                        cacheItemService.DeleteAll();
+                        response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
+                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
                     }
                     else
                     {
-                        _log.Log(DateTimeOffset.UtcNow, "Information", $"Deleted cache item {deleteCacheItemRequest.ItemKey}");
+                        if (String.IsNullOrEmpty(deleteCacheItemRequest.ItemKey))
+                        {
+                            _log.Log(DateTimeOffset.UtcNow, "Information", "Cleared cache");
 
-                        // Delete cache item
-                        cacheItemService.Delete(deleteCacheItemRequest.ItemKey);
-                    }                    
+                            // Clear
+                            cacheItemService.DeleteAll();
+                        }
+                        else
+                        {
+                            _log.Log(DateTimeOffset.UtcNow, "Information", $"Deleted cache item {deleteCacheItemRequest.ItemKey}");
+
+                            // Delete cache item
+                            cacheItemService.Delete(deleteCacheItemRequest.ItemKey);
+                        }
+                    }
                 }
+                catch (Exception exception)
+                {
+                    response.Response.ErrorCode = ResponseErrorCodes.Unknown;
+                    response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: {exception.Message}";
+                }
+                finally
+                {
+                    // Send response
+                    _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
 
-                // Send response
-                _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
+                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed {deleteCacheItemRequest.TypeId}");
+                }
             });
         }
 
@@ -442,6 +565,40 @@ namespace CFCacheServer.Server
                     }
                 }                
             });
+        }
+
+        /// <summary>
+        /// Check cache size, logs warning.
+        /// </summary>
+        /// <returns></returns>
+        private Task CheckCacheSizeAsync()
+        {
+            return Task.Run(() =>
+            {                
+                foreach(var cacheEnvironment in _cacheEnvironments.Where(e => e.MaxSize > 0 && e.PercentUsedForWarning > 0))
+                {
+                    // Don't need to create a scoped service because TotalSize just returns local variable
+                    var totalSize = _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id).TotalSize;
+
+                    // Calculate percent full
+                    var percentFull = (totalSize / cacheEnvironment.MaxSize) * 100;
+
+                    if (percentFull >= cacheEnvironment.PercentUsedForWarning)
+                    {
+                        _log.Log(DateTimeOffset.UtcNow, "Warning", $"Cache size is {totalSize} and max size is {cacheEnvironment.MaxSize} ({percentFull}%)");
+                    }
+                }              
+            });
+        }
+
+        /// <summary>
+        /// Gets cache environment by security key
+        /// </summary>
+        /// <param name="securityKey"></param>
+        /// <returns></returns>
+        private CacheEnvironment? GetCacheEnvironmentBySecurityKey(string securityKey)
+        {
+            return _cacheEnvironments.FirstOrDefault(e => e.SecurityKey == securityKey);
         }
     }
 }

@@ -4,6 +4,12 @@ namespace CFCacheServer.Enums
 {
     public enum ResponseErrorCodes
     {
+        [Description("Cache environment not found")]
+        CacheEnvironmentNotFound,
+
+        [Description("Cache full")]
+        CacheFull,        
+
         [Description("Invalid parameters")]
         InvalidParameters,
 

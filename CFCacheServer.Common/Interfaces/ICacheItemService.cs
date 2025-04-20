@@ -11,7 +11,7 @@ namespace CFCacheServer.Interfaces
         /// <summary>
         /// Environment
         /// </summary>
-        string Environment { get; set; }
+        string CacheEnvironmentId { get; set; }
 
         /// <summary>
         /// Deletes all cache items
@@ -42,6 +42,11 @@ namespace CFCacheServer.Interfaces
         /// Item count
         /// </summary>
         int ItemCount { get; }
+
+        /// <summary>
+        /// Total size (Bytes)
+        /// </summary>
+        long TotalSize { get; }
 
         /// <summary>
         /// Gets cache item keys by filter

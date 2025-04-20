@@ -15,6 +15,8 @@ namespace CFCacheServer.Common.Data
         {
         }
 
+        public DbSet<CacheEnvironment> CacheEnvironment { get; set; }
+
         public DbSet<CacheItem> CacheItem { get; set; } = default!;
     }
 }

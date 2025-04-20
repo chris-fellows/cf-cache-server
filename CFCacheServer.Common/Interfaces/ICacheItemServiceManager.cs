@@ -4,9 +4,7 @@
     /// Manager of ICacheItemService instances
     /// </summary>
     public interface ICacheItemServiceManager
-    {
-        string[] Environments { get; }
-
-        ICacheItemService? GetByEnvironment(string environment, bool addIfMissing);
+    {        
+        ICacheItemService? GetByCacheEnvironmentId(string id);
     }
 }

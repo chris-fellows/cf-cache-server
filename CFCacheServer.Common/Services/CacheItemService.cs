@@ -13,12 +13,17 @@ namespace CFCacheServer.Common.Services
         private readonly IDbContextFactory<CFCacheServerDataContext> _dbFactory;
         private CFCacheServerDataContext? _context;
 
-        private string _environment = String.Empty;
+        private string _cacheEnvironmentId = String.Empty;
         private Dictionary<string, CacheItem> _cacheItems = new();
 
         private Mutex _mutex = new Mutex();
 
         private readonly System.Timers.Timer? _timer;        // Initialised when cache contains items
+
+        /// <summary>
+        /// Total size of cache (Approx).
+        /// </summary>
+        private long _totalSize = 0;
 
         public CacheItemService(IDbContextFactory<CFCacheServerDataContext> dbFactory)
         {
@@ -31,25 +36,27 @@ namespace CFCacheServer.Common.Services
             _timer.Enabled = true;            
         }   
 
-        public string Environment
+        public string CacheEnvironmentId
         {
-            get { return _environment; }
+            get { return _cacheEnvironmentId; }
             set
             {
                 try
                 {
                     _mutex.WaitOne();
 
-                    _environment = value;
-
+                    _cacheEnvironmentId = value;
+                    
                     // Load cache items
                     var cacheItems = Context.CacheItem
-                                .Where(i => i.Environment == _environment).ToList();
+                                .Where(i => i.CacheEnvironmentId == _cacheEnvironmentId).ToList();
 
+                    _totalSize = 0;
                     _cacheItems.Clear();
                     foreach (var cacheItem in cacheItems)
                     {
                         _cacheItems.Add(cacheItem.Key, cacheItem);
+                        _totalSize += cacheItem.GetTotalSize();
                     }
                 }
                 finally
@@ -57,7 +64,7 @@ namespace CFCacheServer.Common.Services
                     _mutex.ReleaseMutex();
                 }
             }
-        }        
+        }                
 
         protected CFCacheServerDataContext Context
         {
@@ -109,6 +116,7 @@ namespace CFCacheServer.Common.Services
             }
             finally
             {
+                _totalSize = 0;
                 _mutex.ReleaseMutex();
             }
         }
@@ -220,7 +228,7 @@ namespace CFCacheServer.Common.Services
                 finally
                 {
                     _mutex.ReleaseMutex();
-                }
+                }                
             }
         }
 
@@ -292,7 +300,8 @@ namespace CFCacheServer.Common.Services
             }
 
             // Add to memory            
-            _cacheItems.Add(cacheItem.Key, cacheItem);            
+            _cacheItems.Add(cacheItem.Key, cacheItem);
+            _totalSize += cacheItem.GetTotalSize();
         }
 
         /// <summary>
@@ -304,7 +313,7 @@ namespace CFCacheServer.Common.Services
             // Delete from DB
             if (cacheItem.Persist)
             {
-                var item = Context.CacheItem.FirstOrDefault(i => i.Environment == _environment && i.Key == cacheItem.Key);
+                var item = Context.CacheItem.FirstOrDefault(i => i.CacheEnvironmentId == _cacheEnvironmentId && i.Key == cacheItem.Key);
                 if (item != null)
                 {
                     Context.CacheItem.Remove(item);
@@ -316,7 +325,10 @@ namespace CFCacheServer.Common.Services
             if (_cacheItems.ContainsKey(cacheItem.Key))
             {
                 _cacheItems.Remove(cacheItem.Key);
+                _totalSize -= cacheItem.GetTotalSize();
             }           
-        }       
+        }
+
+        public long TotalSize => _totalSize;
     }
 }

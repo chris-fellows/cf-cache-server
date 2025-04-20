@@ -2,7 +2,10 @@
 
 namespace CFCacheServer.Models
 {
-    [Index(nameof(Environment), nameof(Key), IsUnique = true)]
+    /// <summary>
+    /// Cache item
+    /// </summary>
+    [Index(nameof(CacheEnvironmentId), nameof(Key), IsUnique = true)]
     public class CacheItem
     {
         /// <summary>
@@ -11,9 +14,9 @@ namespace CFCacheServer.Models
         public string Id { get; set; } = String.Empty;
 
         /// <summary>
-        /// Enviroment
+        /// Cache enviroment
         /// </summary>
-        public string Environment { get; set; } = String.Empty;
+        public string CacheEnvironmentId { get; set; } = String.Empty;
 
         /// <summary>
         /// Key
@@ -44,5 +47,7 @@ namespace CFCacheServer.Models
         /// Created date and time
         /// </summary>
         public DateTimeOffset CreatedDateTime { get; set; } = DateTimeOffset.MinValue;
+
+        public int GetTotalSize() => Value.Length;
     }
 }

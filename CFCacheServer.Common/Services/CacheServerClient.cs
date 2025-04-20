@@ -28,9 +28,12 @@ namespace CFCacheServer.Services
             
             public Channel<Tuple<MessageBase, MessageReceivedInfo>> MessagesChannel = Channel.CreateBounded<Tuple<MessageBase, MessageReceivedInfo>>(50);
 
-            public MessageReceiveSession(string messageId)
+            public CancellationTokenSource CancellationTokenSource { get; internal set; }
+
+            public MessageReceiveSession(string messageId, CancellationTokenSource cancellationTokenSource)
             {                
                 MessageId = messageId;
+                CancellationTokenSource = cancellationTokenSource;
             }
         }
 
@@ -59,6 +62,15 @@ namespace CFCacheServer.Services
 
         public void Dispose()
         {
+            // Cancel any active request response, might be waiting for a response
+            foreach(var session in _responseSessions.Values)
+            {
+                if (!session.CancellationTokenSource.IsCancellationRequested)
+                {
+                    session.CancellationTokenSource.Cancel();
+                }
+            }
+
             _cacheServerConnection.Dispose();
         }
 
@@ -97,7 +109,7 @@ namespace CFCacheServer.Services
 
                     try
                     {
-                        var responsesSession = new MessageReceiveSession(request.Id);                        
+                        var responsesSession = new MessageReceiveSession(request.Id, new CancellationTokenSource());                        
                         _responseSessions.Add(responsesSession.MessageId, responsesSession);
                         disposableSession.Add(() =>
                         {
@@ -108,7 +120,8 @@ namespace CFCacheServer.Services
                         _cacheServerConnection.SendMessage(request, _remoteEndpointInfo);
 
                         // Wait for response
-                        var responseMessages = await WaitForResponsesAsync(request, responsesSession, _responseTimeout);
+                        responsesSession.CancellationTokenSource.CancelAfter(_responseTimeout);                        
+                        var responseMessages = await WaitForResponsesAsync(request, responsesSession);
 
                         // Check response
                         ThrowResponseExceptionIfRequired(responseMessages.FirstOrDefault());
@@ -138,7 +151,7 @@ namespace CFCacheServer.Services
 
                     try
                     {
-                        var responsesSession = new MessageReceiveSession(request.Id);
+                        var responsesSession = new MessageReceiveSession(request.Id, new CancellationTokenSource());
                         _responseSessions.Add(responsesSession.MessageId, responsesSession);
                         disposableSession.Add(() =>
                         {
@@ -148,8 +161,9 @@ namespace CFCacheServer.Services
                         // Send request
                         _cacheServerConnection.SendMessage(request, _remoteEndpointInfo);
 
-                        // Wait for response
-                        var responseMessages = await WaitForResponsesAsync(request, responsesSession, _responseTimeout);
+                        // Wait for response                        
+                        responsesSession.CancellationTokenSource.CancelAfter(_responseTimeout);
+                        var responseMessages = await WaitForResponsesAsync(request, responsesSession);
                         
                         // Check response
                         ThrowResponseExceptionIfRequired(responseMessages.FirstOrDefault());
@@ -184,7 +198,7 @@ namespace CFCacheServer.Services
 
                     try
                     {
-                        var responsesSession = new MessageReceiveSession(request.Id);
+                        var responsesSession = new MessageReceiveSession(request.Id, new CancellationTokenSource());
                         _responseSessions.Add(responsesSession.MessageId, responsesSession);
                         disposableSession.Add(() =>
                         {
@@ -194,8 +208,9 @@ namespace CFCacheServer.Services
                         // Send request
                         _cacheServerConnection.SendMessage(request, _remoteEndpointInfo);
 
-                        // Wait for response
-                        var responseMessages = await WaitForResponsesAsync(request, responsesSession, _responseTimeout);
+                        // Wait for response                        
+                        responsesSession.CancellationTokenSource.CancelAfter(_responseTimeout);
+                        var responseMessages = await WaitForResponsesAsync(request, responsesSession);
 
                         // Check response
                         ThrowResponseExceptionIfRequired(responseMessages.FirstOrDefault());
@@ -230,7 +245,7 @@ namespace CFCacheServer.Services
 
                     try
                     {
-                        var responsesSession = new MessageReceiveSession(request.Id);
+                        var responsesSession = new MessageReceiveSession(request.Id, new CancellationTokenSource());
                         _responseSessions.Add(responsesSession.MessageId, responsesSession);
                         disposableSession.Add(() =>
                         {
@@ -240,8 +255,9 @@ namespace CFCacheServer.Services
                         // Send request
                         _cacheServerConnection.SendMessage(request, _remoteEndpointInfo);
 
-                        // Wait for response
-                        var responseMessages = await WaitForResponsesAsync(request, responsesSession, _responseTimeout);
+                        // Wait for response                  
+                        responsesSession.CancellationTokenSource.CancelAfter(_responseTimeout);
+                        var responseMessages = await WaitForResponsesAsync(request, responsesSession);
 
                         // Check response
                         ThrowResponseExceptionIfRequired(responseMessages.FirstOrDefault());
@@ -280,7 +296,7 @@ namespace CFCacheServer.Services
 
                     try
                     {
-                        var responsesSession = new MessageReceiveSession(request.Id);
+                        var responsesSession = new MessageReceiveSession(request.Id, new CancellationTokenSource());
                         _responseSessions.Add(responsesSession.MessageId, responsesSession);
                         disposableSession.Add(() =>
                         {
@@ -289,8 +305,9 @@ namespace CFCacheServer.Services
 
                         _cacheServerConnection.SendMessage(request, _remoteEndpointInfo);
 
-                        // Wait for response
-                        var responseMessages = await WaitForResponsesAsync(request, responsesSession, _responseTimeout);
+                        // Wait for response                        
+                        responsesSession.CancellationTokenSource.CancelAfter(_responseTimeout);
+                        var responseMessages = await WaitForResponsesAsync(request, responsesSession);
 
                         // Check response
                         ThrowResponseExceptionIfRequired(responseMessages.FirstOrDefault());
@@ -332,13 +349,9 @@ namespace CFCacheServer.Services
         /// <param name="messageReceiveSession"></param>
         /// <param name="timeout"></param>
         /// <returns>All responses received or empty if last response not received</returns>
-        private static async Task<List<MessageBase>> WaitForResponsesAsync(MessageBase request, MessageReceiveSession messageReceiveSession, TimeSpan timeout)
+        private static async Task<List<MessageBase>> WaitForResponsesAsync(MessageBase request, MessageReceiveSession messageReceiveSession)
         {
-            // Create cancellation token source with timeout
-            var cancellationTokenSource = new CancellationTokenSource();
-            cancellationTokenSource.CancelAfter(timeout);
-
-            var cancellationToken = cancellationTokenSource.Token;
+            var cancellationToken = messageReceiveSession.CancellationTokenSource.Token;
 
             var reader = messageReceiveSession.MessagesChannel.Reader;
 
@@ -348,7 +361,7 @@ namespace CFCacheServer.Services
                 !cancellationToken.IsCancellationRequested)
             {
                 // Wait for message received or timeout
-                var response = await reader.ReadAsync(cancellationToken);
+                var response = await reader.ReadAsync(cancellationToken);                
 
                 if (response != null && response.Item1 != null)
                 {

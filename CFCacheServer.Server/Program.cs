@@ -11,6 +11,7 @@ using CFCacheServer.Utilities;
 using CFCacheServer.Common.Data;
 using Microsoft.EntityFrameworkCore;
 using CFCacheServer.Common.Services;
+using CFCacheServer.Models;
 
 internal static class Program
 {
@@ -37,10 +38,11 @@ internal static class Program
         var serviceProvider = CreateServiceProvider();
 
         // Create database
-        CreateDatabase(serviceProvider);
+        CreateDatabase(serviceProvider, systemConfig);
 
         // Start worker
         var worker = new Worker(systemConfig,
+                            serviceProvider.GetRequiredService<ICacheEnvironmentService>(),
                             serviceProvider.GetRequiredService<ICacheItemServiceManager>(),
                             serviceProvider.GetRequiredService<ISimpleLog>());
 
@@ -50,12 +52,35 @@ internal static class Program
         Console.WriteLine("Terminating CF Cache Server");
     }
 
-    private static void CreateDatabase(IServiceProvider serviceProvider)
+    /// <summary>
+    /// Creates cache server DB if necessary and sets default data. Creates default cache environment
+    /// </summary>
+    /// <param name="serviceProvider"></param>
+    private static void CreateDatabase(IServiceProvider serviceProvider, SystemConfig systemConfig)
     {
         using (var context = serviceProvider.GetRequiredService<CFCacheServerDataContext>())
         {
             context.Database.EnsureCreated();
-        }
+
+            // Create default environment if none
+            var cacheEnvironmentService = serviceProvider.GetRequiredService<ICacheEnvironmentService>();
+            var cacheEnviroments = cacheEnvironmentService.GetAll();
+            if (!cacheEnviroments.Any())
+            {                
+                var cacheEnvironment = new CacheEnvironment()
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Name = "Default",
+                    MaxKeyLength = 200,
+                    MaxSize = systemConfig.DefaultMaxSize,
+                    PercentUsedForWarning = 90,
+                    SecurityKey = systemConfig.DefaultSecurityKey
+                };
+                cacheEnvironmentService.Add(cacheEnvironment);
+
+                Console.WriteLine($"Created cache environment {cacheEnvironment.Name}");
+            }
+        }        
     }
 
     /// <summary>
@@ -72,13 +97,22 @@ internal static class Program
             LogFolder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "Log"),
             MaxLogDays = Convert.ToInt32(System.Configuration.ConfigurationManager.AppSettings["MaxLogDays"].ToString()),
             MaxConcurrentTasks = Convert.ToInt32(System.Configuration.ConfigurationManager.AppSettings["MaxConcurrentTasks"].ToString()),
-            SecurityKey = System.Configuration.ConfigurationManager.AppSettings["SecurityKey"].ToString()
+            DefaultMaxSize = Convert.ToInt32(System.Configuration.ConfigurationManager.AppSettings["DefaultMaxSize"].ToString()),
+            DefaultSecurityKey = System.Configuration.ConfigurationManager.AppSettings["DefaultSecurityKey"].ToString()
         };
 
         // Override with arguments
         foreach(var arg in args)
         {
-            if (arg.ToLower().StartsWith("-localport="))
+            if (arg.ToLower().StartsWith("-defaultmaxsize="))
+            {
+                systemConfig.DefaultMaxSize = Convert.ToInt64(arg.Trim().Split('=')[1]);
+            }
+            if (arg.ToLower().StartsWith("-defaultsecuritykey="))
+            {
+                systemConfig.DefaultSecurityKey = arg.Trim().Split('=')[1];
+            }
+            else if (arg.ToLower().StartsWith("-localport="))
             {
                 systemConfig.LocalPort = Convert.ToInt32(arg.Trim().Split('=')[1]);
             }
@@ -89,13 +123,17 @@ internal static class Program
             else if (arg.ToLower().StartsWith("-maxlogdays="))
             {
                 systemConfig.MaxLogDays = Convert.ToInt32(arg.Trim().Split('=')[1]);
-            }
-            else if (arg.ToLower().StartsWith("-securitykey="))
-            {
-                systemConfig.SecurityKey = arg.Trim().Split('=')[1];
             }            
         }
 
+        if (systemConfig.DefaultMaxSize < 0)
+        {
+            throw new ArgumentException($"Default Max Size config setting is invalid");
+        }
+        if (String.IsNullOrEmpty(systemConfig.DefaultSecurityKey))
+        {
+            throw new ArgumentException($"Default Security Key config setting is invalid");
+        }
         if (systemConfig.LocalPort <= 0)
         {
             throw new ArgumentException($"Local Port config setting is invalid");
@@ -107,11 +145,7 @@ internal static class Program
         if (systemConfig.MaxLogDays < 0)
         {
             throw new ArgumentException($"Max Log Days config setting is invalid");
-        }
-        if (String.IsNullOrEmpty(systemConfig.SecurityKey))
-        {
-            throw new ArgumentException($"Security Key config setting is invalid");
-        }
+        }        
 
         return systemConfig;
     }
@@ -131,7 +165,8 @@ internal static class Program
 
         var serviceProvider = new ServiceCollection()
               .AddSingleton<ICacheItemServiceManager, CacheItemServiceManager>()
-              .AddTransient<ICacheItemService, CacheItemService>()          // Per environment,resolved by ICacheItemServiceManager
+              .AddScoped<ICacheEnvironmentService, CacheEnvironmentService>()
+              .AddTransient<ICacheItemService, CacheItemService>()          // Per environment,resolved by ICacheItemServiceManager              
 
               // Add logging (Console & CSV)
               .AddScoped<ISimpleLog>((scope) =>

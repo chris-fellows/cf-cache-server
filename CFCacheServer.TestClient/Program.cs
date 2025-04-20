@@ -7,7 +7,7 @@ using CFConnectionMessaging.Models;
 using System.Diagnostics;
 
 // Set two environments
-var environment1 = "ENV1";
+var environment1 = "Default";
 var environment2 = "ENV2";
 
 var remoteEndpointInfo = new EndpointInfo()

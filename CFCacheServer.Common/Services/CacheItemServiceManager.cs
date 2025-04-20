@@ -1,57 +1,31 @@
-﻿using CFCacheServer.Common.Data;
-using CFCacheServer.Interfaces;
-using Microsoft.EntityFrameworkCore;
+﻿using CFCacheServer.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CFCacheServer.Services
 {
     public class CacheItemServiceManager : ICacheItemServiceManager
-    {
-        private readonly List<ICacheItemService> _cacheItemServices = new();
-        private readonly IServiceProvider _serviceProvider;
-        private readonly Mutex _mutex = new();
+    {        
+        private readonly List<ICacheItemService> _cacheItemServices = new();        
+        private readonly IServiceProvider _serviceProvider;     
 
-        public CacheItemServiceManager(IDbContextFactory<CFCacheServerDataContext> dbFactory,
-                                        IServiceProvider serviceProvider)
+        public CacheItemServiceManager(IServiceProvider serviceProvider)
         {
             _serviceProvider = serviceProvider;
 
-            // Initialise cache item services per environment
-            using (var context = dbFactory.CreateDbContext())
+            // Set cache environment services
+            var cacheEnvironmentService = _serviceProvider.GetRequiredService<ICacheEnvironmentService>();
+            var cacheEnvironments = cacheEnvironmentService.GetAll();
+            foreach(var cacheEnvironment in cacheEnvironments)
             {
-                var environments = context.CacheItem.Select(c => c.Environment).Distinct().ToList();
-                foreach (var environment in environments)
-                {
-                    var cacheItem = GetByEnvironment(environment, true);
-                }
+                var cacheItemService = _serviceProvider.GetRequiredService<ICacheItemService>();
+                cacheItemService.CacheEnvironmentId = cacheEnvironment.Id;
+                _cacheItemServices.Add(cacheItemService);
             }
         }    
         
-        public string[] Environments
-        {
-            get { return _cacheItemServices.Select(c => c.Environment).ToArray(); }
-        }
-
-        public ICacheItemService? GetByEnvironment(string environment, bool addIfMissing)
-        {
-            try
-            {
-                _mutex.WaitOne();
-
-                var cacheItemService = _cacheItemServices.FirstOrDefault(s => s.Environment.ToLower() == environment.ToLower());
-                if (cacheItemService == null && addIfMissing)
-                {                    
-                    cacheItemService = _serviceProvider.GetRequiredService<ICacheItemService>();
-                    cacheItemService.Environment = environment;     // Loads cache items
-                    _cacheItemServices.Add(cacheItemService);
-                }
-
-                return cacheItemService;
-            }
-            finally
-            {
-                _mutex.ReleaseMutex();
-            }
+        public ICacheItemService? GetByCacheEnvironmentId(string cacheEnvironmentId)
+        {            
+            return _cacheItemServices.First(c => c.CacheEnvironmentId == cacheEnvironmentId);            
         }
     }
 }
