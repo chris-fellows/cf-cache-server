@@ -44,10 +44,11 @@ internal static class Program
         var worker = new Worker(systemConfig,
                             serviceProvider.GetRequiredService<ICacheEnvironmentService>(),
                             serviceProvider.GetRequiredService<ICacheItemServiceManager>(),
-                            serviceProvider.GetRequiredService<ISimpleLog>());
+                            serviceProvider.GetRequiredService<ISimpleLog>(), 
+                            serviceProvider);
 
         var cancellationTokenSource = new CancellationTokenSource();
-        worker.Start(cancellationTokenSource);
+        worker.Run(cancellationTokenSource);
      
         Console.WriteLine("Terminating CF Cache Server");
     }
@@ -176,6 +177,9 @@ internal static class Program
                         new SimpleLogCSV(Path.Combine(logFolder, "CacheServer-{date}.txt"))
                     });
               })
+
+              // Register message processors
+              .RegisterAllTypes<IMessageProcessor>(new[] { typeof(Program).Assembly })
 
               // Add SQLite EF Core
               //.AddDbContext<CFMessageQueueDataContext>(options => options.UseSqlite(connectionString), ServiceLifetime.Scoped)

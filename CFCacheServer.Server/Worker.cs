@@ -1,16 +1,11 @@
-﻿using CFCacheServer.Constants;
-using CFCacheServer.Enums;
-using CFCacheServer.Interfaces;
+﻿using CFCacheServer.Interfaces;
 using CFCacheServer.Logging;
 using CFCacheServer.Models;
 using CFCacheServer.Server.Enums;
 using CFCacheServer.Server.Models;
-using CFCacheServer.Utilities;
 using CFConnectionMessaging.Models;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
-using System.ComponentModel.Design;
-using System.Diagnostics.Eventing.Reader;
 using System.Runtime.Loader;
 
 namespace CFCacheServer.Server
@@ -22,7 +17,7 @@ namespace CFCacheServer.Server
     {
         private CancellationTokenSource? _cancellationTokenSource;
 
-        private readonly ClientsConnection _clientsConnection = new ClientsConnection();
+        private readonly IServiceProvider _serviceProvider;
 
         private readonly ConcurrentQueue<QueueItem> _queueItems = new();
 
@@ -40,25 +35,28 @@ namespace CFCacheServer.Server
         private DateTimeOffset _lastArchiveLogs = DateTimeOffset.MinValue;
 
         private TimeSpan _checkCacheSizeFrequency = TimeSpan.FromMinutes(10);
-        private DateTimeOffset _lastCheckCacheSize = DateTimeOffset.MinValue;
+        private DateTimeOffset _lastCheckCacheSize = DateTimeOffset.MinValue;        
 
-        private List<CacheEnvironment> _cacheEnvironments = new();
+        private ServerResources _serverResources;
 
         public Worker(SystemConfig systemConfig, ICacheEnvironmentService cacheEnvironmentService,
-                                    ICacheItemServiceManager cacheItemServiceManager, ISimpleLog log)
+                      ICacheItemServiceManager cacheItemServiceManager, ISimpleLog log,
+                      IServiceProvider serviceProvider)
         {
             _systemConfig = systemConfig;
             _cacheItemServiceManager = cacheItemServiceManager;
             _log = log;
+            _serviceProvider = serviceProvider;
 
-            // Get all cache environments
-            _cacheEnvironments = cacheEnvironmentService.GetAll();
+            _serverResources = new ServerResources()
+            {
+                ClientsConnection = new ClientsConnection(),
+                CacheEnvironments = cacheEnvironmentService.GetAll()
+            };
 
             // Handle message received
-            _clientsConnection.OnMessageReceived += delegate (MessageBase message, MessageReceivedInfo messageReceivedInfo)
-            {
-                //_log.Log(DateTimeOffset.UtcNow, "Information", $"Received message {message.TypeId} from {messageReceivedInfo.RemoteEndpointInfo.Ip}:{messageReceivedInfo.RemoteEndpointInfo.Port}");
-
+            _serverResources.ClientsConnection.OnMessageReceived += delegate (MessageBase message, MessageReceivedInfo messageReceivedInfo)
+            {                
                 var queueItem = new QueueItem()
                 {
                     ItemType = QueueItemTypes.MessageReceived,
@@ -71,12 +69,36 @@ namespace CFCacheServer.Server
 
         public void Dispose()
         {
-            _clientsConnection.Dispose();
+            _serverResources.ClientsConnection.Dispose();
         }
 
         private static bool IsInDockerContainer
         {
             get { return Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true"; }
+        }
+
+        /// <summary>
+        /// Starts overdue tasks, adds a queue item
+        /// </summary>
+        private void StartOverdueTasks()
+        {         
+            // Periodically archive logs
+            if (_lastArchiveLogs.Add(_archiveLogsFrequency) <= DateTimeOffset.UtcNow &&
+                !_queueItems.Any(i => i.ItemType == QueueItemTypes.ArchiveLogs))
+            {
+                _lastArchiveLogs = DateTimeOffset.UtcNow;
+                _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.ArchiveLogs });
+            }
+
+            Thread.Yield();
+
+            // Periodically check cache size
+            if (_lastCheckCacheSize.Add(_checkCacheSizeFrequency) <= DateTimeOffset.UtcNow &&
+                !_queueItems.Any(i => i.ItemType == QueueItemTypes.CheckCacheSize))
+            {
+                _lastCheckCacheSize = DateTimeOffset.UtcNow;
+                _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.CheckCacheSize });
+            }
         }
 
         /// <summary>
@@ -99,27 +121,14 @@ namespace CFCacheServer.Server
             while (!_cancellationTokenSource.Token.IsCancellationRequested)
             {
                 Thread.Sleep(200);
-               
-                // Periodically archive logs
-                if (_lastArchiveLogs.Add(_archiveLogsFrequency) <= DateTimeOffset.UtcNow &&
-                    !_queueItems.Any(i => i.ItemType == QueueItemTypes.ArchiveLogs))
-                {
-                    _lastArchiveLogs = DateTimeOffset.UtcNow;
-                    _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.ArchiveLogs });
-                }
 
-                Thread.Yield();
-
-                // Periodically check cache size
-                if (_lastCheckCacheSize.Add(_checkCacheSizeFrequency) <= DateTimeOffset.UtcNow &&
-                    !_queueItems.Any(i => i.ItemType == QueueItemTypes.CheckCacheSize))
-                {
-                    _lastCheckCacheSize = DateTimeOffset.UtcNow;
-                    _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.CheckCacheSize });
-                }
+                StartOverdueTasks();                              
                      
                 Thread.Yield();
             }
+
+            // Wait for thread to exit
+            _thread.Join();
         }
 
         /// <summary>
@@ -134,44 +143,37 @@ namespace CFCacheServer.Server
                 while (!Console.KeyAvailable &&
                     !_cancellationTokenSource.Token.IsCancellationRequested)
                 {
-                    Thread.Sleep(200);                    
+                    Thread.Sleep(200);
 
-                    // Periodically archive logs
-                    if (_lastArchiveLogs.Add(_archiveLogsFrequency) <= DateTimeOffset.UtcNow &&
-                        !_queueItems.Any(i => i.ItemType == QueueItemTypes.ArchiveLogs))
-                    {
-                        _lastArchiveLogs = DateTimeOffset.UtcNow;
-                        _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.ArchiveLogs });
-                    }
-
-                    Thread.Yield();
-
-                    // Periodically check cache size
-                    if (_lastCheckCacheSize.Add(_checkCacheSizeFrequency) <= DateTimeOffset.UtcNow &&
-                        !_queueItems.Any(i => i.ItemType == QueueItemTypes.CheckCacheSize))
-                    {
-                        _lastCheckCacheSize = DateTimeOffset.UtcNow;
-                        _queueItems.Enqueue(new QueueItem() { ItemType = QueueItemTypes.CheckCacheSize });
-                    }
-
+                    StartOverdueTasks();
+                    
                     Thread.Yield();
                 }
             } while (Console.ReadKey(true).Key != ConsoleKey.Escape &&
                     !_cancellationTokenSource.Token.IsCancellationRequested);
+            
+            // Notify thread to exit
+            if (!_cancellationTokenSource.IsCancellationRequested)
+            {
+                _cancellationTokenSource.Cancel();
+            }
+
+            // Wait for thread to exit
+            _thread.Join();
         }
 
         /// <summary>
         /// Starts worker thread, waits for event that triggers stop (Container stop, user presses Escape)
         /// </summary>
         /// <param name="cancellationTokenSource"></param>
-        public void Start(CancellationTokenSource cancellationTokenSource)
+        public void Run(CancellationTokenSource cancellationTokenSource)
         {
             _log.Log(DateTimeOffset.UtcNow, "Information", "Worker starting");            
 
             _cancellationTokenSource = cancellationTokenSource; 
 
             // Start thread
-            _thread = new Thread(Run);
+            _thread = new Thread(WorkerThread);
             _thread.Start();
      
             if (IsInDockerContainer)
@@ -186,20 +188,15 @@ namespace CFCacheServer.Server
             _log.Log(DateTimeOffset.UtcNow, "Information", "Worker stopping");
         }
 
-        public void Stop()
-        {            
-            if (_cancellationTokenSource != null) _cancellationTokenSource.Cancel();
-        }
-
         /// <summary>
         /// Performs worker processing
         /// </summary>
-        public void Run()
+        public void WorkerThread()
         {
             var cancellationToken = _cancellationTokenSource.Token;
 
             // Listen for clients
-            _clientsConnection.StartListening(_systemConfig.LocalPort);            
+            _serverResources.ClientsConnection.StartListening(_systemConfig.LocalPort);            
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -209,7 +206,7 @@ namespace CFCacheServer.Server
                     while (_queueItems.Any() &&
                         _queueItemTasks.Count < _systemConfig.MaxConcurrentTasks)
                     {
-                        if (_queueItems.TryDequeue(out QueueItem queueItem))
+                        if (_queueItems.TryDequeue(out var queueItem))
                         {
                             ProcessQueueItem(queueItem);
                         }
@@ -226,12 +223,12 @@ namespace CFCacheServer.Server
                 catch(Exception exception)
                 {
                     _log.Log(DateTimeOffset.UtcNow, "Error", $"Error in worker: {exception.Message}");
-                    Thread.Sleep(5000);
+                    if (!cancellationToken.IsCancellationRequested) Thread.Sleep(5000);
                 }
             }
 
             // Stop listening
-            _clientsConnection.StopListening();
+            _serverResources.ClientsConnection.StopListening();
         }
        
         /// <summary>
@@ -242,24 +239,13 @@ namespace CFCacheServer.Server
         {
             if (queueItem.ItemType == QueueItemTypes.MessageReceived && queueItem.Message != null)
             {
-                switch (queueItem.Message.TypeId)
+                var messageProcessor = _serviceProvider.GetServices<IMessageProcessor>().FirstOrDefault(p => p.CanProcess(queueItem.Message));
+                if (messageProcessor != null)
                 {
-                    case MessageTypeIds.AddCacheItemRequest:                        
-                        _queueItemTasks.Add(new QueueItemTask(HandleAddCacheItemRequestAsync((AddCacheItemRequest)queueItem.Message, queueItem.MessageReceivedInfo!), queueItem));
-                        break;
+                    messageProcessor.SetServerResources(_serverResources);
 
-                    case MessageTypeIds.DeleteCacheItemRequest:                        
-                        _queueItemTasks.Add(new QueueItemTask(HandleDeleteCacheItemRequestAsync((DeleteCacheItemRequest)queueItem.Message, queueItem.MessageReceivedInfo!), queueItem));
-                        break;
-
-                    case MessageTypeIds.GetCacheItemKeysRequest:                        
-                        _queueItemTasks.Add(new QueueItemTask(HandleGetCacheItemKeysRequestAsync((GetCacheItemKeysRequest)queueItem.Message, queueItem.MessageReceivedInfo!), queueItem));
-                        break;
-
-                    case MessageTypeIds.GetCacheItemRequest:                        
-                        _queueItemTasks.Add(new QueueItemTask(HandleGetCacheItemRequestAsync((GetCacheItemRequest)queueItem.Message, queueItem.MessageReceivedInfo!), queueItem));
-                        break;
-                }
+                    _queueItemTasks.Add(new QueueItemTask(messageProcessor.ProcessAsync(queueItem.Message, queueItem.MessageReceivedInfo), queueItem));
+                }    
             }
             else if (queueItem.ItemType == QueueItemTypes.ArchiveLogs)
             {
@@ -297,254 +283,7 @@ namespace CFCacheServer.Server
             {
                 _log.Log(DateTimeOffset.UtcNow, "Error", $"Error processing task {queueItemTask.QueueItem.ItemType}: {queueItemTask.Task.Exception.Message}");
             }
-        }
-        private Task HandleAddCacheItemRequestAsync(AddCacheItemRequest addCacheItemRequest, MessageReceivedInfo messageReceivedInfo)
-        {
-            return Task.Run(() =>
-            {
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing request to add {addCacheItemRequest.CacheItem.Key} to cache ({messageReceivedInfo.RemoteEndpointInfo.Ip}:{messageReceivedInfo.RemoteEndpointInfo.Port})");
-
-                var response = new AddCacheItemResponse()
-                {
-                    Response = new MessageResponse()
-                    {
-                        IsMore = false,
-                        MessageId = addCacheItemRequest.Id,
-                        Sequence = 1
-                    },
-                };
-
-                try
-                {
-                    // Get cache environment                    
-                    var cacheEnvironment = GetCacheEnvironmentBySecurityKey(addCacheItemRequest.SecurityKey);
-                    
-                    // Get cache item service for environment (Might not exist)
-                    var cacheItemService = cacheEnvironment == null ? null : _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id);                    
-
-                    if (cacheEnvironment == null)
-                    {                        
-                        response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
-                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                    }
-                    else if (cacheItemService == null)
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.CacheEnvironmentNotFound;
-                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                    }
-                    else if (String.IsNullOrWhiteSpace(addCacheItemRequest.CacheItem.Key))
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.InvalidParameters;
-                        response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: Key is not set";
-                    }
-                    else if (cacheEnvironment.MaxKeyLength > 0 &&
-                        addCacheItemRequest.CacheItem.Key.Length > cacheEnvironment.MaxKeyLength)
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.InvalidParameters;
-                        response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: Key is too long";
-                    }
-                    else if (cacheEnvironment.MaxSize > 0 &&
-                        cacheItemService.TotalSize + addCacheItemRequest.CacheItem.GetTotalSize() > cacheEnvironment.MaxSize)
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.CacheFull;
-                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                    }
-                    else
-                    {
-                        // Set cache item properties before saving
-                        addCacheItemRequest.CacheItem.Id = Guid.NewGuid().ToString();
-                        addCacheItemRequest.CacheItem.CreatedDateTime = DateTimeOffset.UtcNow;         // TODO: Sending DateTimeOffset does not serialize                    
-                        addCacheItemRequest.CacheItem.CacheEnvironmentId = cacheEnvironment.Id;
-
-                        cacheItemService.Add(addCacheItemRequest.CacheItem);
-                    }
-                }
-                catch (Exception exception)
-                {
-                    response.Response.ErrorCode = ResponseErrorCodes.Unknown;
-                    response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: {exception.Message}";
-                }
-                finally
-                {
-                    // Send response
-                    _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
-
-                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed request to add {addCacheItemRequest.CacheItem.Key} to cache");
-                }
-            });
-        }
-
-        private Task HandleGetCacheItemRequestAsync(GetCacheItemRequest getCacheItemRequest, MessageReceivedInfo messageReceivedInfo)
-        {
-            return Task.Run(() =>
-            {
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing {getCacheItemRequest.TypeId} {getCacheItemRequest.ItemKey} {getCacheItemRequest.Environment}");
-
-                var response = new GetCacheItemResponse()
-                {
-                    Response = new MessageResponse()
-                    {
-                        IsMore = false,
-                        MessageId = getCacheItemRequest.Id,
-                        Sequence = 1
-                    },
-                };
-
-                try
-                {
-                    // Get cache environment
-                    var cacheEnvironment = GetCacheEnvironmentBySecurityKey(getCacheItemRequest.SecurityKey);
-
-                    // Get cache item service for environment (Might not exist)
-                    var cacheItemService = cacheEnvironment == null ? null : _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id);
-
-                    if (cacheEnvironment == null)
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
-                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                    }
-                    else if (cacheItemService == null)
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.CacheEnvironmentNotFound;
-                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                    }
-                    else
-                    {
-                        // Get cache item
-                        response.CacheItem = cacheItemService.Get(getCacheItemRequest.ItemKey);
-                    }
-                }
-                catch (Exception exception)
-                {
-                    response.Response.ErrorCode = ResponseErrorCodes.Unknown;
-                    response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: {exception.Message}";
-                }
-                finally
-                {
-                    // Send response
-                    _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
-
-                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed request to get cache item {getCacheItemRequest.ItemKey}");
-                }
-            });
-        }
-
-        private Task HandleGetCacheItemKeysRequestAsync(GetCacheItemKeysRequest getCacheItemKeysRequest, MessageReceivedInfo messageReceivedInfo)
-        {
-            return Task.Run(() =>
-            {
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing {getCacheItemKeysRequest.TypeId}");
-
-                var response = new GetCacheItemKeysResponse()
-                {
-                    Response = new MessageResponse()
-                    {
-                        IsMore = false,
-                        MessageId = getCacheItemKeysRequest.Id,
-                        Sequence = 1
-                    },
-                };
-
-                try
-                {
-
-                    // Get cache environment
-                    var cacheEnvironment = GetCacheEnvironmentBySecurityKey(getCacheItemKeysRequest.SecurityKey);
-
-                    // Get cache item service for environment (Might not exist)
-                    var cacheItemService = cacheEnvironment == null ? null : _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id);
-
-                    if (cacheEnvironment == null)
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
-                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                    }
-                    else if (cacheItemService == null)
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.CacheEnvironmentNotFound;
-                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                    }
-                    else
-                    {
-                        response.ItemKeys = cacheItemService.GetKeysByFilter(getCacheItemKeysRequest.Filter);
-                    }
-                }
-                catch (Exception exception)
-                {
-                    response.Response.ErrorCode = ResponseErrorCodes.Unknown;
-                    response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: {exception.Message}";
-                }
-                finally
-                {
-                    // Send response
-                    _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
-
-                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed {getCacheItemKeysRequest.TypeId}");
-                }
-            });
-        }
-
-        private Task HandleDeleteCacheItemRequestAsync(DeleteCacheItemRequest deleteCacheItemRequest, MessageReceivedInfo messageReceivedInfo)
-        {
-            return Task.Run(() =>
-            {
-                _log.Log(DateTimeOffset.UtcNow, "Information", $"Processing {deleteCacheItemRequest.TypeId}");
-
-                var response = new DeleteCacheItemResponse()                        
-                {
-                    Response = new MessageResponse()
-                    {
-                        IsMore = false,
-                        MessageId = deleteCacheItemRequest.Id,
-                        Sequence = 1
-                    },
-                };
-
-                try
-                {
-                    // Get cache environment
-                    var cacheEnvironment = GetCacheEnvironmentBySecurityKey(deleteCacheItemRequest.SecurityKey);
-
-                    // Get cache item service for environment (Might not exist)
-                    var cacheItemService = cacheEnvironment == null ? null : _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id);
-
-                    if (cacheEnvironment == null)
-                    {
-                        response.Response.ErrorCode = ResponseErrorCodes.PermissionDenied;
-                        response.Response.ErrorMessage = EnumUtilities.GetEnumDescription(response.Response.ErrorCode);
-                    }
-                    else
-                    {
-                        if (String.IsNullOrEmpty(deleteCacheItemRequest.ItemKey))
-                        {
-                            _log.Log(DateTimeOffset.UtcNow, "Information", "Cleared cache");
-
-                            // Clear
-                            cacheItemService.DeleteAll();
-                        }
-                        else
-                        {
-                            _log.Log(DateTimeOffset.UtcNow, "Information", $"Deleted cache item {deleteCacheItemRequest.ItemKey}");
-
-                            // Delete cache item
-                            cacheItemService.Delete(deleteCacheItemRequest.ItemKey);
-                        }
-                    }
-                }
-                catch (Exception exception)
-                {
-                    response.Response.ErrorCode = ResponseErrorCodes.Unknown;
-                    response.Response.ErrorMessage = $"{EnumUtilities.GetEnumDescription(response.Response.ErrorCode)}: {exception.Message}";
-                }
-                finally
-                {
-                    // Send response
-                    _clientsConnection.SendMessage(response, messageReceivedInfo.RemoteEndpointInfo);
-
-                    _log.Log(DateTimeOffset.UtcNow, "Information", $"Processed {deleteCacheItemRequest.TypeId}");
-                }
-            });
-        }
+        }               
 
         /// <summary>
         /// Archives logs
@@ -575,7 +314,7 @@ namespace CFCacheServer.Server
         {
             return Task.Run(() =>
             {                
-                foreach(var cacheEnvironment in _cacheEnvironments.Where(e => e.MaxSize > 0 && e.PercentUsedForWarning > 0))
+                foreach(var cacheEnvironment in _serverResources.CacheEnvironments.Where(e => e.MaxSize > 0 && e.PercentUsedForWarning > 0))
                 {
                     // Don't need to create a scoped service because TotalSize just returns local variable
                     var totalSize = _cacheItemServiceManager.GetByCacheEnvironmentId(cacheEnvironment.Id).TotalSize;
@@ -589,16 +328,6 @@ namespace CFCacheServer.Server
                     }
                 }              
             });
-        }
-
-        /// <summary>
-        /// Gets cache environment by security key
-        /// </summary>
-        /// <param name="securityKey"></param>
-        /// <returns></returns>
-        private CacheEnvironment? GetCacheEnvironmentBySecurityKey(string securityKey)
-        {
-            return _cacheEnvironments.FirstOrDefault(e => e.SecurityKey == securityKey);
         }
     }
 }
